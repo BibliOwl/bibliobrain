@@ -72,15 +72,17 @@ $buildRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "bibliobrain-installer-" + [Guid]::NewGuid().ToString("N")
 )
 $sourceRoot = Join-Path $buildRoot "source"
-$archivePath = Join-Path $buildRoot "source.zip"
+# PowerShell variable names ignore case: this must not be called $archivePath,
+# which would overwrite $ArchivePath (the ZIP package in dist).
+$sourceExportPath = Join-Path $buildRoot "source.zip"
 New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
 
 try {
-    & $git.Source -C $RepoRoot archive --format=zip --output=$archivePath HEAD
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath)) {
+    & $git.Source -C $RepoRoot archive --format=zip --output=$sourceExportPath HEAD
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $sourceExportPath)) {
         throw "Unable to create the clean Git source export."
     }
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $sourceRoot -Force
+    Expand-Archive -LiteralPath $sourceExportPath -DestinationPath $sourceRoot -Force
 
     $requiredLegalPaths = @(
         "LICENSE",
