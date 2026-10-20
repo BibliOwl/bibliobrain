@@ -25,7 +25,8 @@ async function main() {
   let browser;
   try {
     browser = await chromium.launch({ channel: 'msedge', headless: true });
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    // The checks read French text: pin the language, CI browsers run in English.
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'fr-FR' });
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));

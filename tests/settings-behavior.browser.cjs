@@ -23,7 +23,8 @@ async function main() {
   let browser;
   try {
     browser = await chromium.launch({ channel: 'msedge', headless: true });
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    // The checks read French text: pin the language, CI browsers run in English.
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: 'fr-FR' });
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -532,6 +533,8 @@ async function main() {
     ocrStart = { status: 200, payload: { ok: true } };
     await page.click('#ocr-quickfix-retry');
     await page.waitForFunction(() => document.getElementById('settings-scans').dataset.ocrView === 'working');
+    // The view first says "Démarrage de la lecture…" until the status poll answers.
+    await page.waitForFunction(() => /page 1 sur 5/.test(document.getElementById('ocr-quickfix-progress-text').textContent));
     assert.match(await page.textContent('#ocr-quickfix-progress-text'), /page 1 sur 5/);
     assert.equal(await page.getAttribute('[data-ocr-step=download]', 'data-state'), 'done');
     assert.equal(await page.getAttribute('[data-ocr-step=read]', 'data-state'), 'active');

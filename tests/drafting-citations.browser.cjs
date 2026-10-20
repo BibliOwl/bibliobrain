@@ -42,7 +42,8 @@ async function main() {
   let browser;
   try {
     browser = await chromium.launch({ channel: 'msedge', headless: true });
-    const page = await browser.newPage();
+    // The checks read French text: pin the language, CI browsers run in English.
+    const page = await browser.newPage({ locale: 'fr-FR' });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/api/**', route => route.fulfill({ json: { ok: true, exists: false } }));
