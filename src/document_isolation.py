@@ -108,7 +108,7 @@ class _WindowsJob:
             raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
 
     def adopt(self, process: subprocess.Popen) -> None:
-        if not self._kernel32.AssignProcessToJobObject(self._handle, int(process._handle)):
+        if not self._kernel32.AssignProcessToJobObject(self._handle, int(process._handle)):  # type: ignore[attr-defined]
             import ctypes
 
             raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
@@ -124,9 +124,10 @@ class _WindowsJob:
 
 def _posix_limits(memory_bytes: int):
     def apply() -> None:
-        import resource
+        if sys.platform != "win32":
+            import resource
 
-        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+            resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
 
     return apply
 
@@ -157,7 +158,7 @@ def _spawn(command: list[str], memory_bytes: int) -> tuple[subprocess.Popen, _Wi
 def _terminate(process: subprocess.Popen, job: _WindowsJob | None) -> None:
     if job is not None:
         job.kill()
-    elif os.name != "nt":
+    elif sys.platform != "win32":
         import signal
 
         try:

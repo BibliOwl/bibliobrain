@@ -1304,7 +1304,7 @@ def _compact_paper_lines(docs: list[Any], *, start: int, language: str) -> list[
 def _label_papers(docs: list[Any]) -> list[Any]:
     from src.rag.query_engine import _clone_document_with_metadata
 
-    labelled = []
+    labelled: list[Any] = []
     for index, doc in enumerate(docs, start=1):
         metadata = {**(getattr(doc, "metadata", {}) or {}), "ref_label": f"S{index}"}
         if isinstance(doc, SimpleNamespace):

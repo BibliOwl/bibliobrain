@@ -272,6 +272,7 @@ def test_identify_reference_by_bibliographic_search(monkeypatch):
 
     monkeypatch.setattr(pdf_metadata, "_crossref_get_json", fake_get)
     work = ot.identify_reference("[3] C. Varnel, Strip critical states, J. Fict. Math. 9 (1968) 1308.")
+    assert work is not None
     assert work["doi"] == "10.1000/strip"
     assert work["year"] == "1968" and work["cited_by_count"] == 1234
     assert work["url"] == "https://doi.org/10.1000/strip"
@@ -295,7 +296,8 @@ def test_identify_reference_rejects_a_namesake_of_the_same_year(monkeypatch):
     monkeypatch.setattr(pdf_metadata, "_crossref_get_json", lambda path, params=None: {"message": {"items": [namesake]}})
     assert ot.identify_reference("[3] C. Varnel, J. Fict. Math. 9 (1968) 1308.") is None
     monkeypatch.setattr(pdf_metadata, "_crossref_get_json", lambda path, params=None: {"message": {"items": [namesake, same]}})
-    assert ot.identify_reference("[3] C. Varnel, J. Fict. Math. 9 (1968) 1308.")["doi"] == "10.1000/strip"
+    work = ot.identify_reference("[3] C. Varnel, J. Fict. Math. 9 (1968) 1308.")
+    assert work is not None and work["doi"] == "10.1000/strip"
 
 
 def test_identify_reference_uses_the_doi_and_reports_failures(monkeypatch):
@@ -309,6 +311,7 @@ def test_identify_reference_uses_the_doi_and_reports_failures(monkeypatch):
 
     monkeypatch.setattr(pdf_metadata, "_crossref_get_json", fake_get)
     work = ot.identify_reference("[4] D. Ostrik, J. Fict. D 3 (1970) 489, doi:10.1000/fict.1970.489.")
+    assert work is not None
     assert paths == ["/works/10.1000%2Ffict.1970.489"]
     assert work["title"] == "Strips"
 

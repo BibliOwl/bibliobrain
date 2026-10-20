@@ -299,7 +299,8 @@ def test_load_zotero_library_indexes_only_the_standalone_pdfs_dropped_into_bibli
     assert lookup_zotero_item("OTHER001/other.pdf", library) is None
     assert lookup_zotero_item("TRASHED1/trashed.pdf", library) is None
     # Parented attachments are loaded as before.
-    assert lookup_zotero_item("ATTACH1/active.pdf", library).item_key == "PARENT1"
+    attached = lookup_zotero_item("ATTACH1/active.pdf", library)
+    assert attached is not None and attached.item_key == "PARENT1"
     entries = [
         (f"{key}/{name}", str(storage / key / name)) for key, (name, _body) in pdfs.items()
     ]

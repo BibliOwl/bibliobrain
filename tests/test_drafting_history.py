@@ -77,6 +77,7 @@ def test_versions_skip_empty_and_unchanged_drafts(monkeypatch, workspace_tmp_dir
     assert drafting_history.save_version("<p>Premier&nbsp;jet</p><p>du texte</p>", reason="before_restore") is None
 
     restored = drafting_history.get_version(saved["id"])
+    assert restored is not None
     assert restored["html"] == "<p>Premier&nbsp;jet</p><p>du texte</p>"
     assert restored["citation_start_number"] == 3
 

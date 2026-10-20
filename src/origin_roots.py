@@ -56,11 +56,16 @@ def _work_payload(raw: dict[str, Any]) -> dict[str, Any]:
         for record in (raw.get("authorships") or [])[:4]
     ]
     authors = [name for name in authors if name]
-    location = raw.get("primary_location") if isinstance(raw.get("primary_location"), dict) else {}
-    source = location.get("source") if isinstance(location.get("source"), dict) else {}
+    location = raw.get("primary_location")
+    if not isinstance(location, dict):
+        location = {}
+    source = location.get("source")
+    if not isinstance(source, dict):
+        source = {}
     doi = re.sub(r"^https?://doi\.org/", "", str(raw.get("doi") or ""), flags=re.I).strip().lower()
     try:
-        year = int(raw.get("publication_year")) if raw.get("publication_year") else None
+        raw_year = raw.get("publication_year")
+        year = int(raw_year) if raw_year else None
     except (TypeError, ValueError):
         year = None
     return {
@@ -150,14 +155,14 @@ def select_roots(
             counts_by_year[int(work["year"])] += citing_counts[work_id]
     roots = []
     for work_id, count in citing_counts.most_common():
-        work = references.get(work_id)
-        if not work or not work.get("year"):
+        root = references.get(work_id)
+        if not root or not root.get("year"):
             continue
-        if median_year is not None and work["year"] >= median_year:
+        if median_year is not None and root["year"] >= median_year:
             continue
         if count < _MIN_CITING_COUNT or count < _MIN_CITING_SHARE * size:
             continue
-        roots.append({**work, "citing_count": count, "citing_share": round(count / size, 3)})
+        roots.append({**root, "citing_count": count, "citing_share": round(count / size, 3)})
         if len(roots) >= _MAX_ROOTS:
             break
     deviations = spectrum_peaks(dict(counts_by_year))

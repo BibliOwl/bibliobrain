@@ -5,6 +5,7 @@ import json
 import shutil
 import sqlite3
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,7 +22,7 @@ MODEL = "embeddinggemma:latest"
 
 
 @pytest.fixture
-def env(workspace_tmp_dir: Path, monkeypatch: Any) -> SimpleNamespace:
+def env(workspace_tmp_dir: Path, monkeypatch: Any) -> Iterator[SimpleNamespace]:
     settings: dict[str, Any] = {
         "chunk_size": 1000,
         "model": MODEL,

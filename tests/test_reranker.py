@@ -296,12 +296,14 @@ def _fake_cuda(monkeypatch: pytest.MonkeyPatch, *, major: int, total_gib: float,
     import sys
     import types
 
+    gpu_major = major
+
     class _Props:
         name = "Fake GPU"
+        major = gpu_major
         minor = 0
         total_memory = int(total_gib * 1024**3)
 
-    _Props.major = major
     cuda = types.SimpleNamespace(
         is_available=lambda: True,
         get_device_properties=lambda _index: _Props(),

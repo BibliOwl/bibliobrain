@@ -44,7 +44,8 @@ def test_numbered_entries_and_markers_resolve():
     refs = parse_reference_list(text)
     assert refs.style == "bracket"
     assert [entry.number for entry in refs.entries] == [1, 2, 3, 4, 5]
-    assert "(1995)" in refs.entry(4).text  # entry continued on the next line
+    entry = refs.entry(4)
+    assert entry is not None and "(1995)" in entry.text  # entry continued on the next line
     markers = extract_markers(text[: refs.start])
     assert [marker.numbers for marker in markers] == [(2,), (3, 4, 5), (1, 3)]
     varnel = resolve_marker(markers[0], refs)
@@ -81,7 +82,8 @@ def test_entries_stop_at_a_figure_caption():
         + "[3] D. Varnel, J. Fict. 8 (1995) 1.\n"
     )
     refs = parse_reference_list(text)
-    assert refs.entry(2).text == "[2] B. Moraine, J. Fict. 7 (1994) 412."
+    entry = refs.entry(2)
+    assert entry is not None and entry.text == "[2] B. Moraine, J. Fict. 7 (1994) 412."
 
 
 def test_numbered_list_ignores_volume_and_page_numbers():

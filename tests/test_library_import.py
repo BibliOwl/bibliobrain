@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def wait_until(condition, timeout: float = 5.0) -> None:
 
 
 @pytest.fixture
-def folder_library(workspace_tmp_dir, monkeypatch) -> Path:
+def folder_library(workspace_tmp_dir, monkeypatch) -> Iterator[Path]:
     data_dir = workspace_tmp_dir / "data"
     data_dir.mkdir()
     monkeypatch.setattr(config, "DATA_PATH", str(data_dir))
@@ -301,9 +302,12 @@ def test_pdf_waits_for_a_zotero_that_does_not_answer_then_is_sent_without_a_new_
         "save_pdf_to_zotero",
         lambda _path, *, filename: ZoteroSaveResult(saved=False, error="unreachable"),
     )
-    monkeypatch.setattr(
-        library_import, "ensure_zotero_running", lambda: starts.append("start") or start_outcome
-    )
+
+    def ensure_zotero_running():
+        starts.append("start")
+        return start_outcome
+
+    monkeypatch.setattr(library_import, "ensure_zotero_running", ensure_zotero_running)
     api = client()
 
     first = upload(api, "Étude énergie.pdf", PDF_BYTES)
@@ -422,9 +426,12 @@ def test_closed_zotero_is_started_then_given_the_pdf(zotero_library, monkeypatch
         return ZoteroSaveResult(saved=True, recognized=True, title="A recognized paper")
 
     monkeypatch.setattr(library_import, "save_pdf_to_zotero", fake_save)
-    monkeypatch.setattr(
-        library_import, "ensure_zotero_running", lambda: events.append("start") or "started"
-    )
+
+    def ensure_zotero_running():
+        events.append("start")
+        return "started"
+
+    monkeypatch.setattr(library_import, "ensure_zotero_running", ensure_zotero_running)
     monkeypatch.setattr(library_import, "zotero_is_running", lambda: False)
     api = client()
 

@@ -1039,7 +1039,7 @@ def test_drafting_rag_reports_a_blocked_dll_instead_of_a_missing_index(monkeypat
     monkeypatch.setattr(drafting_citations, "_rag_ready", lambda: False)
 
     def blocked(model_name, threshold):
-        raise OSError('[WinError 4551] application control policy blocked "torch\lib\c10.dll"')
+        raise OSError(r'[WinError 4551] application control policy blocked "torch\lib\c10.dll"')
 
     monkeypatch.setattr(native_chat, "ensure_rag_ready", blocked)
     message = drafting_citations.ensure_drafting_rag("ornith-1.5:9b")

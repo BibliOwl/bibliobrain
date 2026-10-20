@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,7 @@ def _corpus(years_and_refs):
 
 def test_select_roots_keeps_older_widely_cited_references():
     corpus = _corpus([(2000 + index, []) for index in range(20)])
-    references = {
+    references: dict[str, dict[str, Any]] = {
         "W1": {"openalex_id": "W1", "year": 1962, "title": "Root"},
         "W2": {"openalex_id": "W2", "year": 2015, "title": "Too recent"},
         "W3": {"openalex_id": "W3", "year": 1970, "title": "Cited by too few"},
@@ -30,7 +31,7 @@ def test_select_roots_keeps_older_widely_cited_references():
 def test_spectrum_peaks_compare_each_year_with_its_neighbours():
     deviations = origin_roots.spectrum_peaks({1960: 1, 1961: 1, 1962: 20, 1963: 2, 1964: 1})
     assert deviations[1962] == 19  # 20 minus the median of 1, 1, 20, 2, 1
-    assert max(deviations, key=deviations.get) == 1962
+    assert max(deviations, key=deviations.__getitem__) == 1962
 
 
 def test_find_topic_roots_counts_each_citing_paper_once(monkeypatch):
@@ -58,7 +59,7 @@ def test_find_topic_roots_counts_each_citing_paper_once(monkeypatch):
     monkeypatch.setattr(origin_roots, "_get_json_with_retry", fake_get)
     monkeypatch.setattr(origin_roots, "_openalex_api_key", lambda: "key")
     monkeypatch.setattr(origin_roots, "get_cached_response", lambda key: None)
-    stored = {}
+    stored: dict[str, Any] = {}
     monkeypatch.setattr(origin_roots, "set_cached_response", lambda key, api, payload, ttl_seconds: stored.update(payload=payload))
     monkeypatch.setattr(origin_roots, "_mark_library", lambda roots: [root.update(library=None) for root in roots])
 

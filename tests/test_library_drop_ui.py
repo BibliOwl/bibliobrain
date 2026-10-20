@@ -13,8 +13,9 @@ STATIC_EVENT_BINDINGS_JS = (ROOT / "static" / "js" / "static-event-bindings.js")
 def _server_codes_known_to_the_page() -> set[str]:
     codes: set[str] = set()
     for constant in ("REFUSALS", "ZOTERO_STOPS"):
-        body = re.search(rf"const {constant} = \[(.*?)\];", DROP_JS, re.DOTALL).group(1)
-        codes |= set(re.findall(r"'(\w+)'", body))
+        match = re.search(rf"const {constant} = \[(.*?)\];", DROP_JS, re.DOTALL)
+        assert match is not None
+        codes |= set(re.findall(r"'(\w+)'", match.group(1)))
     return codes
 
 

@@ -214,8 +214,8 @@ def test_build_manifest_describes_the_zip_package(workspace_tmp_dir: Path) -> No
 
 def _load_release_tools():
     spec = importlib.util.spec_from_file_location("release_tools", ROOT / "scripts/release_tools.py")
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
 
@@ -241,7 +241,12 @@ def test_nothing_is_fetched_before_the_user_answered(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(update_check, "_fetch_manifest", lambda url: calls.append(url) or {})
+
+    def fetch_manifest(url: str) -> dict:
+        calls.append(url)
+        return {}
+
+    monkeypatch.setattr(update_check, "_fetch_manifest", fetch_manifest)
 
     status = update_check.check_now()
 

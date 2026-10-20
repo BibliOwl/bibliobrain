@@ -1577,7 +1577,7 @@ def _retrieve_documents(
     own before a third rerank of the two results: a French question took
     1.3 s where an English one took 0.5 s.
     """
-    single = {"use_reranker": use_reranker, "depth": depth}
+    single: dict[str, Any] = {"use_reranker": use_reranker, "depth": depth}
 
     def searched_alone() -> list[Document]:
         return _dedupe_documents_by_content(

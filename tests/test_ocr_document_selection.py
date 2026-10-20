@@ -139,7 +139,7 @@ def library(job, monkeypatch, tmp_path):
         full = tmp_path / name
         full.write_text(name, encoding="utf-8")
         documents.append((name, str(full)))
-    calls = {"scan": [], "transcribe": []}
+    calls: dict[str, list] = {"scan": [], "transcribe": []}
     index = _OcrIndex()
 
     def scan(full, stop):

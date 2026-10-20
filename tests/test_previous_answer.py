@@ -81,9 +81,9 @@ def test_only_an_answer_with_sources_can_be_referred_to() -> None:
 def test_context_holds_every_source_with_its_label(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(qe, "_previous_answer_char_budget", lambda model: 100_000)
 
-    docs, note, omitted = qe._previous_answer_context(
-        "Classe ces articles", _history(_sources(40)), "m"
-    )
+    context = qe._previous_answer_context("Classe ces articles", _history(_sources(40)), "m")
+    assert context is not None
+    docs, note, omitted = context
 
     assert [doc.metadata["ref_label"] for doc in docs] == [f"S{i}" for i in range(1, 41)]
     assert "A passage." in docs[0].page_content and omitted == 0
@@ -98,16 +98,18 @@ def test_passages_go_first_then_sources_when_the_window_is_small(
     sources = _sources(40, snippet="x" * 300)
     monkeypatch.setattr(qe, "_previous_answer_char_budget", lambda model: 4000)
 
-    docs, _note, omitted = qe._previous_answer_context(
-        "Classe ces articles", _history(sources), "m"
-    )
+    context = qe._previous_answer_context("Classe ces articles", _history(sources), "m")
+    assert context is not None
+    docs, _note, omitted = context
 
     # Passages dropped first: every source still there.
     assert len(docs) == 40 and omitted == 0
     assert all("x" * 300 not in doc.page_content for doc in docs)
 
     monkeypatch.setattr(qe, "_previous_answer_char_budget", lambda model: 1500)
-    docs, note, omitted = qe._previous_answer_context("Classe ces articles", _history(sources), "m")
+    context = qe._previous_answer_context("Classe ces articles", _history(sources), "m")
+    assert context is not None
+    docs, note, omitted = context
 
     assert 0 < len(docs) < 40 and omitted == 40 - len(docs)
     assert f"{len(docs)} premieres" in note

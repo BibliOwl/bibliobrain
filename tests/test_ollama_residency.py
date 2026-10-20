@@ -30,12 +30,18 @@ def gpu(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return machine
 
 
+def _calibrations() -> dict[str, dict[str, Any]]:
+    calibrations = ollama_residency._calibrations
+    assert calibrations is not None
+    return calibrations
+
+
 def _payload(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     return json.loads(llm_provider._ollama_request_payload(body, **kwargs))
 
 
 def test_a_planner_call_without_window_gets_the_chat_window(gpu: dict[str, Any]) -> None:
-    ollama_residency._calibrations["qwen3.5:4b"] = {"num_ctx": 98304}
+    _calibrations()["qwen3.5:4b"] = {"num_ctx": 98304}
 
     planner = _payload(
         {"model": "qwen3.5:4b", "prompt": "Which tool?", "options": {"num_predict": 16}}
@@ -51,7 +57,7 @@ def test_a_planner_call_without_window_gets_the_chat_window(gpu: dict[str, Any])
 
 
 def test_a_prompt_longer_than_the_window_still_gets_room(gpu: dict[str, Any]) -> None:
-    ollama_residency._calibrations["qwen3.5:4b"] = {"num_ctx": 8192}
+    _calibrations()["qwen3.5:4b"] = {"num_ctx": 8192}
 
     body = _payload({"model": "qwen3.5:4b", "prompt": "long"}, options_override={"num_ctx": 16384})
 
@@ -77,7 +83,7 @@ def test_unloads_lookups_and_embedding_models_are_left_alone(gpu: dict[str, Any]
 def test_an_explicit_window_in_the_settings_wins(
     gpu: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ollama_residency._calibrations["qwen3.5:4b"] = {"num_ctx": 98304}
+    _calibrations()["qwen3.5:4b"] = {"num_ctx": 98304}
     monkeypatch.setattr(llm_provider, "get_ollama_context_length", lambda: 32768)
 
     assert ollama_residency.pinned_context_length("qwen3.5:4b") == 0
@@ -87,7 +93,7 @@ def test_an_explicit_window_in_the_settings_wins(
 def test_resolved_window_is_the_pinned_one_unless_the_prompt_needs_more(
     gpu: dict[str, Any],
 ) -> None:
-    ollama_residency._calibrations["qwen3.5:4b"] = {"num_ctx": 24576}
+    _calibrations()["qwen3.5:4b"] = {"num_ctx": 24576}
 
     assert llm_provider.resolve_ollama_context_length("qwen3.5:4b") == 24576
     assert llm_provider.resolve_ollama_context_length("qwen3.5:4b", required_tokens=3000) == 24576
@@ -183,11 +189,12 @@ def test_without_a_vram_figure_the_provisional_window_stays_unsaved(
 ) -> None:
     gpu["vram"] = 0
     loads: list[int] = []
-    monkeypatch.setattr(
-        ollama_residency,
-        "_load_at",
-        lambda _model, context_length: loads.append(context_length) or _footprint(context_length),
-    )
+
+    def load_at(_model: str, context_length: int) -> Any:
+        loads.append(context_length)
+        return _footprint(context_length)
+
+    monkeypatch.setattr(ollama_residency, "_load_at", load_at)
 
     assert ollama_residency.calibrate("qwen3.5:4b") == 16384
     assert loads == [16384]
@@ -261,7 +268,7 @@ def test_a_question_asked_while_measuring_waits_for_the_window(
 def test_warm_up_reuses_a_valid_measure(
     gpu: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ollama_residency._calibrations["qwen3.5:4b"] = {
+    _calibrations()["qwen3.5:4b"] = {
         "num_ctx": 65536,
         "digest": "abc",
         "vram_total": 12 * _GIB,
@@ -269,11 +276,12 @@ def test_warm_up_reuses_a_valid_measure(
     loads: list[int] = []
     monkeypatch.setattr(llm_provider, "is_ollama_provider", lambda: True)
     monkeypatch.setattr(ollama_residency, "_warm_embedding_model", lambda: None)
-    monkeypatch.setattr(
-        ollama_residency,
-        "_load_at",
-        lambda _model, context_length: loads.append(context_length) or _footprint(context_length),
-    )
+
+    def load_at(_model: str, context_length: int) -> Any:
+        loads.append(context_length)
+        return _footprint(context_length)
+
+    monkeypatch.setattr(ollama_residency, "_load_at", load_at)
 
     result = ollama_residency.warm_up("qwen3.5:4b")
 
@@ -284,7 +292,7 @@ def test_warm_up_reuses_a_valid_measure(
 def test_warm_up_measures_again_after_a_new_pull(
     gpu: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ollama_residency._calibrations["qwen3.5:4b"] = {
+    _calibrations()["qwen3.5:4b"] = {
         "num_ctx": 65536,
         "digest": "old",
         "vram_total": 12 * _GIB,

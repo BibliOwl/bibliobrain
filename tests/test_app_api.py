@@ -4409,7 +4409,12 @@ def test_drafting_origin_identify_needs_web_access(workspace_tmp_dir: Path, monk
     import src.api.drafting as drafting_api
 
     sent = []
-    monkeypatch.setattr(drafting_api, "identify_reference", lambda text: sent.append(text) or {"year": "1964"})
+
+    def identify_reference(text):
+        sent.append(text)
+        return {"year": "1964"}
+
+    monkeypatch.setattr(drafting_api, "identify_reference", identify_reference)
     client = TestClient(app_api.app)
     body = {"reference": "[1] C. P. Bean, Rev. Mod. Phys. 36, 31 (1964)."}
 
