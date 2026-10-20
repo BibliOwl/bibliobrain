@@ -48,13 +48,56 @@ jobs:
         shell: pwsh
         run: ./packaging/test-installer-payload.ps1
 
-      # Code signing goes here once a certificate exists (for example Azure
-      # Trusted Signing); pass -CertificateThumbprint to build-installer.ps1.
-      - name: Build the installer and the update manifest
+      # The manifest hashes the final file, so it is written after signing.
+      - name: Build the installer
         shell: pwsh
-        run: >
-          ./packaging/build-installer.ps1
-          -ReleaseBaseUrl "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+        run: ./packaging/build-installer.ps1
+
+      # Free code signing for open source by SignPath Foundation. Enabled by the
+      # repository variable SIGNPATH_ORGANIZATION_ID and the secret
+      # SIGNPATH_API_TOKEN; without them the release ships unsigned as before.
+      - name: Upload the unsigned installer
+        id: unsigned
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: dist/Bibliobrain-Setup-*.exe
+
+      - name: Sign the installer with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: bibliobrain
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Replace the installer by the signed one
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem signed -Recurse -Filter "Bibliobrain-Setup-*.exe" | Select-Object -First 1
+          if (-not $signed) { throw "SignPath returned no installer." }
+          Copy-Item -LiteralPath $signed.FullName -Destination dist -Force
+          $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path dist $signed.Name)
+          if ($signature.Status -ne "Valid") { throw "Installer signature is $($signature.Status)." }
+
+      - name: Write the update manifest
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          $installer = Get-Item "dist/Bibliobrain-Setup-$version.exe"
+          python scripts/release_tools.py manifest `
+            --installer $installer.FullName `
+            --archive dist/Bibliobrain-Windows.zip `
+            --release-base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" `
+            --version $version `
+            --output-dir dist
+          if ($LASTEXITCODE -ne 0) { throw "The update manifest could not be written." }
 
       - name: Publish the release
         shell: pwsh
@@ -62,6 +105,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
+          # Required by the SignPath Foundation terms on the download page. Added
+          # here and not in the manifest, whose notes are shown inside the app.
+          if ("${{ vars.SIGNPATH_ORGANIZATION_ID }}" -ne "") {
+            Add-Content -LiteralPath dist/release-notes.md -Encoding utf8 -Value @(
+              "",
+              "---",
+              "Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). See the [code signing policy](https://github.com/${{ github.repository }}#code-signing-policy)."
+            )
+          }
           $arguments = @(
             "release", "create", $tag,
             "dist/Bibliobrain-Setup-$($tag.TrimStart('v')).exe", "dist/Bibliobrain-Windows.zip", "dist/latest.json",

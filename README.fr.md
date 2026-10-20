@@ -141,6 +141,14 @@ Pour signaler un problème, utilisez le rapport de bug intégré : décrivez ce 
 - [Sauvegardes, maintenance et désinstallation](wiki/Maintenance.md)
 - [Journal des modifications](CHANGELOG.md)
 
+## Politique de signature du code
+
+Signature de code gratuite fournie par [SignPath.io](https://signpath.io), certificat de la [SignPath Foundation](https://signpath.org). La demande auprès de la SignPath Foundation est en cours d'examen : tant qu'elle n'est pas acceptée, les versions publiées ne sont pas signées. Seul l'installateur Windows (`Bibliobrain-Setup-X.Y.Z.exe`) est signé, et uniquement lorsqu'il est construit à partir de ce dépôt par le [workflow de publication](.github/workflows/release.yml) sur GitHub Actions.
+
+Rôles de l'équipe : le projet n'a qu'un seul mainteneur, [bibliOwl](https://github.com/bibliOwl), à la fois auteur des modifications, relecteur et approbateur. Les contributions extérieures sont relues et fusionnées par le mainteneur (voir [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+Confidentialité : voir la [politique de confidentialité](PRIVACY.md). Bibliobrain n'envoie de données hors de votre ordinateur que pour les fonctions qui y sont décrites, et la vérification des mises à jour comme les rapports de bug demandent votre accord.
+
 ## Technologies
 
 FastAPI et Uvicorn côté serveur ; LangChain et ChromaDB pour la recherche ; Ollama ou tout service compatible OpenAI pour les modèles (client `openai` officiel avec `instructor` pour les sorties structurées) ; frontend en HTML/CSS/JS.
