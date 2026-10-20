@@ -16,7 +16,7 @@ joignez ni document confidentiel ni clé API.
 - **Statut :** acceptée temporairement
 - **Version utilisée :** `chromadb==1.5.7`
 - **Échéance de révision :** 31 octobre 2026, et avant chaque publication
-- **Dernière révision :** 11 octobre 2026 — aucune version corrigée publiée
+- **Dernière révision :** 20 octobre 2026 — aucune version corrigée publiée
 - **Condition de retrait :** adopter la première version corrigée compatible, puis retirer
   l’exception de la CI
 
@@ -29,7 +29,7 @@ Les exceptions couvrent actuellement les avis suivants :
 | `PYSEC-2026-3814` | `CVE-2026-45833` | exécution de code après modification serveur d’une collection avec `trust_remote_code` | non exposé : aucune API Chroma ni modification de configuration |
 | `PYSEC-2026-3815` | `CVE-2026-45831` | `SimpleRBACAuthorizationProvider` ignore la ressource tenant/base/collection | non exposé : aucun fournisseur d’authentification Chroma |
 
-Au 11 octobre 2026, les quatre fiches OSV donnent `chromadb` 1.5.9 comme dernière version
+Au 20 octobre 2026, les quatre fiches OSV donnent `chromadb` 1.5.9 comme dernière version
 affectée, et 1.5.9 (5 mai 2026) est la dernière version publiée : aucune version corrigée
 n’existe. `langchain-chroma==1.1.0`, toujours la dernière version, exige `chromadb>=1.3.5,<2`.
 `pip-audit` sur `requirements.lock` ne signale aucun autre avis que ceux listés ici. Cette acceptation ne vaut que pour
