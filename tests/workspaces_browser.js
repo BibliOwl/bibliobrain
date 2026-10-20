@@ -1,0 +1,184 @@
+// Browser integration tests using the actual application DOM and handlers.
+function isZoteroInUse() { return false; }
+function hideStartupBootSplash() {}
+async function bootApplicationAuto() {}
+const fixturePapers = [
+  { title: 'Microbial diversity in restored wetlands', year: 2024, authors_line: 'Martin et al.', venue: 'Journal of Environmental Management and Ecological Restoration Sciences', publisher: 'Elsevier', doi: '10.1000/wetlands.24', llm_relevance_score: 87, abstract: 'We sampled 24 wetlands. Restoration increased microbial diversity. The follow-up was limited to one year.', short_summary: 'Une étude de 24 zones humides observe une diversité microbienne accrue après restauration.', llm_rationale: 'Étudie directement le lien entre restauration et diversité microbienne.', open_access_pdf: 'https://example.org/paper.pdf' },
+  { title: 'Long-term recovery of coastal ecosystems', year: 2022, authors_line: 'Lee et al.', publisher_url: 'https://example.org/coastal', abstract: 'A ten-year observational study examined coastal recovery. Biodiversity improved gradually.', short_summary: 'Un suivi de dix ans décrit le rétablissement progressif de la biodiversité côtière.' },
+  { title: 'Evidence synthesis for wetland conservation', year: 2024, authors_line: 'Garcia et al.', abstract: 'A systematic review of 80 studies identified conservation outcomes.', short_summary: 'Une revue de 80 études rassemble les résultats des stratégies de conservation.', open_access_pdf: 'https://example.org/review.pdf' },
+  { title: 'The fourth paper', year: 2021, abstract: '' },
+  { title: 'The fifth paper', year: 2020, abstract: '' },
+];
+window.fetch = async (url, options = {}) => {
+  const address = String(url);
+  let payload = { ok: true };
+  if (address.startsWith('/api/library')) payload = { rows: [[fixturePapers[0].title]], pagination: { has_more: false } };
+  else if (address === '/api/drafting-document') payload = options.method ? { ok: true } : { ok: true, exists: false };
+  else if (address === '/api/article-discovery') payload = { ok: true, results: fixturePapers };
+  else if (address.startsWith('/api/discovery-history')) payload = { searches: [] };
+  else if (address === '/api/notebooks') payload = { notebooks: [] };
+  else if (address === '/api/drafting-rewrite') payload = { text: 'The study shows a clear effect.' };
+  else if (address === '/api/article-discovery/compare') payload = { papers: JSON.parse(options.body).papers.map(p => ({ id: p.id, method: p.abstract ? { summary: 'Méthode décrite dans le résumé.', quote: p.abstract.split('. ')[0] + '.' } : null })) };
+  else if (address === '/api/drafting-proofread') return new Response('data: ' + JSON.stringify({ type: 'result', payload: { corrected_text: 'The study shows an effect.', issues: [{ original: 'show', suggestion: 'shows', explanation: 'Subject–verb agreement.' }] } }) + '\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
+  return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+};
+window.addEventListener('load', async () => {
+  const outcomes = [];
+  const assert = (name, condition) => { outcomes.push({ name, passed: Boolean(condition) }); };
+  try {
+    document.getElementById('startup-help-modal').style.display = 'none';
+    initFocusedWorkspaces();
+    const model = document.getElementById('model-select');
+    model.innerHTML = '<option value="test-model">test-model</option>';
+    document.getElementById('allow-external-discovery').checked = true;
+    await initDraftingWorkspace();
+    document.getElementById('discovery-input').value = 'Restauration des zones humides et biodiversité';
+    _renderDiscoveryResults({ results: fixturePapers });
+    await loadDiscoveryLibraryTitles();
+    assert('Search collapses after results', !document.getElementById('discovery-search-form').open);
+    const resultCard = index => document.querySelector(`.discovery-card[data-discovery-index="${index}"]`);
+    assert('DOI links to its resolver', resultCard(0).querySelector('.discovery-meta a.discovery-doi')?.getAttribute('href') === 'https://doi.org/10.1000/wetlands.24');
+    assert('Missing year and DOI are left out of the metadata line', !/n\.d\.|DOI|indisponible/.test(resultCard(3).querySelector('.discovery-meta').textContent));
+    assert('Venue and publisher are shown on the card', /Journal of Environmental[\s\S]*Elsevier/.test(resultCard(0).querySelector('.discovery-meta').textContent));
+    assert('Venue and publisher do not widen the card', resultCard(0).scrollWidth <= resultCard(0).clientWidth + 1);
+    const relevance = resultCard(0).querySelector('.discovery-relevance');
+    assert('Model relevance is visible on the card', relevance?.textContent.replace(/\s/g, '') === '87/100' && relevance.classList.contains('is-high'));
+    assert('No relevance badge without a model score', !resultCard(1).querySelector('.discovery-relevance'));
+    assert('Open access papers offer the download', Boolean(resultCard(0).querySelector('.discovery-download-btn')));
+    assert('Without open access PDF the publisher page is the main action', resultCard(1).querySelector('.discovery-link.is-primary')?.getAttribute('href') === 'https://example.org/coastal');
+    assert('Without open access PDF no disabled control is shown', !resultCard(1).querySelector('button[disabled], .discovery-download-btn'));
+    const year = document.getElementById('discovery-filter-year');
+    const oa = document.getElementById('discovery-filter-oa');
+    year.value = '2024'; oa.checked = true; applyDiscoveryFilters();
+    assert('Year and OA filters combine', document.querySelectorAll('.discovery-card:not([hidden])').length === 2);
+    document.getElementById('discovery-filter-library').value = 'present'; applyDiscoveryFilters();
+    assert('Library filter combines with other filters', document.querySelectorAll('.discovery-card:not([hidden])').length === 1);
+    document.getElementById('discovery-filter-library').value = 'absent'; applyDiscoveryFilters();
+    assert('Filtered cards preserve original result indices', document.querySelector('.discovery-card:not([hidden])').dataset.discoveryIndex === '2');
+    document.querySelector('[data-compare-index="2"]').click();
+    assert('Comparison picks the actual filtered article', discoveryRefinement.selected.has(2));
+    document.getElementById('discovery-filter-reset').click();
+    const sort = document.getElementById('discovery-sort');
+    const cardOrder = () => [...document.querySelectorAll('.discovery-card')].map(card => card.dataset.discoveryIndex).join(',');
+    sort.value = 'oldest'; sort.dispatchEvent(new Event('change', { bubbles: true }));
+    assert('Oldest-first sort orders cards by year', cardOrder() === '4,3,1,0,2');
+    sort.value = 'newest'; sort.dispatchEvent(new Event('change', { bubbles: true }));
+    assert('Newest-first sort keeps relevance order within a year', cardOrder() === '0,2,1,3,4');
+    document.getElementById('discovery-filter-reset').click();
+    assert('Reset restores relevance order', sort.value === 'relevance' && cardOrder() === '0,1,2,3,4');
+    [0, 1, 3].forEach(id => document.querySelector(`[data-compare-index="${id}"]`).click());
+    assert('Comparison limits selection to four', document.querySelector('[data-compare-index="4"]').disabled);
+    openDiscoveryComparison();
+    assert('Comparison dialog has selected article titles', document.getElementById('discovery-comparison-table').textContent.includes(fixturePapers[2].title));
+    await analyzeDiscoveryComparison();
+    assert('Comparison renders supporting excerpts', document.querySelectorAll('#discovery-comparison-table blockquote').length === 3);
+    document.getElementById('discovery-comparison-dialog').close();
+    document.getElementById('discovery-clear-comparison').click();
+    assert('Clearing comparison re-enables checkboxes', !document.querySelector('[data-compare-index="4"]').disabled);
+    year.value = '2020'; oa.checked = true; applyDiscoveryFilters();
+    assert('Empty filters show a recovery message', !document.getElementById('discovery-filter-empty').hidden);
+    renderDiscoveryEmptyState('Loading', 'Fixture', { loading: true });
+    assert('A new search clears the previous empty-filter message', document.getElementById('discovery-filter-empty').hidden);
+    _renderDiscoveryResults({ results: fixturePapers });
+    const editor = _draftingGetEditor();
+    const reset = html => {
+      editor.innerHTML = html;
+      state.drafting.selectionRange = null;
+      window.getSelection().removeAllRanges();
+      captureDraftingChangeSource();
+      _draftingGetReviewPanel().innerHTML = '<div id="drafting-change-list"></div>';
+    };
+    reset('<p>The <em>study</em> show an effect.</p>');
+    draftingChanges.issues = [{ original: 'study show', suggestion: 'study shows' }];
+    acceptDraftingChange(0);
+    assert('Correction spans inline formatting', editor.textContent === 'The study shows an effect.');
+    undoDraftingChange();
+    assert('Undo restores text and formatting', editor.innerHTML === '<p>The <em>study</em> show an effect.</p>');
+    reset('<p>show show</p>');
+    draftingChanges.issues = [{ original: 'show', suggestion: 'shows' }];
+    acceptDraftingChange(0);
+    assert('Ambiguous corrections do not change the document', editor.textContent === 'show show');
+    reset('<p>Original</p>');
+    draftingChanges.issues = [{ original: 'Original', suggestion: 'Revised' }];
+    editor.firstChild.firstChild.data = 'Original plus new user text';
+    acceptDraftingChange(0);
+    assert('Stale suggestions cannot overwrite new edits', editor.textContent === 'Original plus new user text');
+    reset('<p>Before <span class="drafting-citation-token" contenteditable="false">[1]</span> after</p>');
+    assert('Citation anchors cannot be replaced', findDraftingChangeRange('Before [1] after') === null);
+    reset('<p>First</p><p>Second</p>');
+    assert('Paragraph boundaries cannot be erased', findDraftingChangeRange('FirstSecond') === null);
+    reset('<p>show and test</p>');
+    draftingChanges.issues = [{ original: 'show', suggestion: 'shows' }, { original: 'test', suggestion: 'tests' }];
+    acceptDraftingChange(0); acceptDraftingChange(1);
+    assert('Independent corrections can be accepted in sequence', editor.textContent === 'shows and tests');
+    reset('<p>Repeated. Repeated.</p>');
+    const range = document.createRange();
+    range.setStart(editor.firstChild.firstChild, 10); range.setEnd(editor.firstChild.firstChild, 19);
+    state.drafting.selectionRange = range;
+    captureDraftingChangeSource();
+    draftingChanges.issues = [{ original: 'Repeated.', suggestion: 'Revised.' }];
+    acceptDraftingChange(0);
+    assert('Corrections stay inside the original selection', editor.textContent === 'Repeated. Revised.');
+    reset('<p>The study show an effect.</p>');
+    const selection = document.createRange(); selection.selectNodeContents(editor.firstChild);
+    state.drafting.selectionRange = selection;
+    const workbenchBeforeSelection = document.querySelector('.drafting-workbench').getBoundingClientRect();
+    updateDraftingSelectionToolbar();
+    const selectionToolbar = document.getElementById('drafting-selection-toolbar');
+    const workbenchAfterSelection = document.querySelector('.drafting-workbench').getBoundingClientRect();
+    assert('Selection actions appear for a passage', !selectionToolbar.hidden);
+    assert('Selection actions float outside the drafting layout', selectionToolbar.parentElement === document.body && getComputedStyle(selectionToolbar).position === 'fixed');
+    assert('Selection actions do not shift the drafting workbench', workbenchBeforeSelection.top === workbenchAfterSelection.top && workbenchBeforeSelection.height === workbenchAfterSelection.height);
+    const previousTheme = document.documentElement.getAttribute('data-theme');
+    const previousPerformanceMode = document.documentElement.getAttribute('data-performance-mode');
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.documentElement.setAttribute('data-performance-mode', 'light');
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const selectionToolbarBackground = getComputedStyle(selectionToolbar).backgroundColor;
+    const selectionToolbarChannels = selectionToolbarBackground.match(/[\d.]+/g) || [];
+    const selectionToolbarAlpha = selectionToolbarChannels.length < 4 ? 1 : Number(selectionToolbarChannels[3]);
+    assert('Selection actions stay opaque in light performance mode', selectionToolbarAlpha === 1);
+    if (previousTheme === null) document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', previousTheme);
+    if (previousPerformanceMode === null) document.documentElement.removeAttribute('data-performance-mode');
+    else document.documentElement.setAttribute('data-performance-mode', previousPerformanceMode);
+    await runDraftingSelectionAction('rephrase');
+    assert('Rephrasing offers a reviewable proposal', draftingChanges.issues[0]?.suggestion === 'The study shows a clear effect.');
+    assert('Rephrasing does not auto-replace text', editor.textContent === 'The study show an effect.');
+    await runDraftingSelectionAction('shorten');
+    assert('Shortening also waits for acceptance', editor.textContent === 'The study show an effect.' && draftingChanges.issues.length === 1);
+    acceptDraftingChange(0);
+    assert('Accepted rewrite replaces only the selected passage', editor.textContent === 'The study shows a clear effect.');
+    reset('<p>The study show an effect.</p>');
+    await runDraftingProofread();
+    assert('Proofread SSE renders individual corrections', draftingChanges.issues[0]?.original === 'show');
+    acceptDraftingChange(0);
+    assert('Proofread correction applies through the real handler', editor.textContent === 'The study shows an effect.');
+    setDraftingFocus(true);
+    assert('Focus hides the assistant', getComputedStyle(document.querySelector('.drafting-side-shell')).display === 'none');
+    setDraftingFocus(false);
+    assert('Focus restores the assistant', getComputedStyle(document.querySelector('.drafting-side-shell')).display !== 'none');
+    reset('<p>Wetland restoration can support biodiversity recovery, but its effects vary with habitat conditions and the duration of monitoring.</p><p>Comparing field observations with long-term studies helps distinguish early responses from sustained ecological change.</p>');
+    _draftingSyncFromEditor(false);
+    updateDraftingSelectionToolbar();
+    _renderDraftingProofread({ summary: 'Une proposition de clarification.', issues: [{ original: 'can support', suggestion: 'may support', explanation: 'Conserve le degré d’incertitude.' }] });
+    _renderDiscoveryResults({ results: fixturePapers });
+    switchTab('drafting');
+    document.body.classList.remove('startup-help-open');
+    document.getElementById('startup-help-overlay').classList.remove('open');
+    document.getElementById('startup-help-modal').style.display = 'none';
+  } catch (error) { outcomes.push({ name: error.stack, passed: false }); }
+  const previewOptions = new URLSearchParams(location.search);
+  if (previewOptions.get('theme') === 'light') document.documentElement.dataset.theme = 'light';
+  if (previewOptions.get('view') === 'comparison') {
+    discoveryRefinement.selected = new Set([0, 1]);
+    openDiscoveryComparison();
+    await analyzeDiscoveryComparison();
+  }
+  const report = document.createElement('pre');
+  report.id = 'workspace-test-report';
+  report.hidden = true;
+  report.textContent = JSON.stringify(outcomes, null, 2);
+  document.body.appendChild(report);
+  document.title = `${outcomes.filter(r => r.passed).length}/${outcomes.length} workspace checks — isolated fixture`;
+});

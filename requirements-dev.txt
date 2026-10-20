@@ -1,0 +1,13 @@
+black==25.9.0
+mypy==1.18.2
+pip-audit==2.10.1
+pytest==8.4.2
+pytest-cov==7.1.0
+coverage==7.16.0
+ruff==0.13.3
+uv==0.11.19
+
+# Optional LaTeX compiler for validating generated .tex exports in development.
+# `pdflatex` on PyPI is only a wrapper around a system pdflatex binary; `tecto`
+# ships the Tectonic executable as a pip-installable wheel.
+tecto==0.16.9

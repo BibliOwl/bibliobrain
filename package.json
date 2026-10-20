@@ -1,0 +1,18 @@
+{
+  "name": "bibliobrain-frontend-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Development-only tooling for the Bibliobrain static frontend (ESLint, Playwright browser tests). The application itself has no Node.js runtime dependency.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "lint": "eslint static/js",
+    "lint:fix": "eslint static/js --fix",
+    "test:browser": "node tests/drafting-citations.browser.cjs && node tests/drafting-interop.browser.cjs && node tests/settings-behavior.browser.cjs && node tests/library-drop.browser.cjs && node tests/update-consent.browser.cjs && node tests/startup-online-metadata.browser.cjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "eslint": "9.39.4",
+    "globals": "17.3.0",
+    "playwright": "1.63.0"
+  }
+}

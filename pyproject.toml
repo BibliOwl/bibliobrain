@@ -1,0 +1,68 @@
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = ["-p", "no:cacheprovider"]
+
+# Coverage is opt-in: `pytest --cov` (CI) or `pytest --cov --cov-report=html`.
+[tool.coverage.run]
+source = ["src", "app_api"]
+branch = true
+omit = [
+  "src/*_benchmark.py",
+  "src/human_quality_review.py",
+  "src/managed_server.py",
+]
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
+precision = 1
+exclude_also = [
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "pragma: no cover",
+  "\\.\\.\\.$",
+]
+
+[tool.mypy]
+python_version = "3.14"
+files = [
+  "src/api",
+  "src/static_assets.py",
+  "src/analysis_cache_db.py",
+  "src/chat_history_db.py",
+  "src/file_access.py",
+  "src/library.py",
+  "src/llm_provider.py",
+  "src/rag/document_loader.py",
+  "src/rag/query_engine.py",
+  "src/rag/state.py",
+  "src/rag/evidence.py",
+  "src/rag/vector_store.py",
+  "src/rag/zotero_integration.py",
+  "src/rag_settings.py",
+  "tests",
+]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+exclude = [
+  "^docs/",
+]

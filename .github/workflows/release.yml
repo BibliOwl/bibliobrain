@@ -1,0 +1,72 @@
+# Publishes a release when a version tag is pushed:
+#   python scripts/release_tools.py prepare X.Y.Z, commit, then
+#   git tag -a vX.Y.Z -m "Bibliobrain X.Y.Z" && git push origin HEAD vX.Y.Z
+# The release carries the installer, the same files as a ZIP package (for
+# antivirus software that quarantines the unsigned installer) and latest.json,
+# the manifest the in-app update check reads (src/update_check.py). Prereleases
+# (vX.Y.Z-beta.1) are published as such and never reach "releases/latest", so
+# users are not offered them.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Check that the tag matches VERSION
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match VERSION ($version)."
+          }
+
+      - name: Install Inno Setup when the image lacks it
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and -not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+          }
+
+      # Installs, repairs, upgrades and uninstalls the package in a temporary
+      # folder, and checks what Setup does when install.ps1 succeeds or fails.
+      - name: Smoke-test the installer package
+        shell: pwsh
+        run: ./packaging/test-installer-payload.ps1
+
+      # Code signing goes here once a certificate exists (for example Azure
+      # Trusted Signing); pass -CertificateThumbprint to build-installer.ps1.
+      - name: Build the installer and the update manifest
+        shell: pwsh
+        run: >
+          ./packaging/build-installer.ps1
+          -ReleaseBaseUrl "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $arguments = @(
+            "release", "create", $tag,
+            "dist/Bibliobrain-Setup-$($tag.TrimStart('v')).exe", "dist/Bibliobrain-Windows.zip", "dist/latest.json",
+            "--title", "Bibliobrain $($tag.TrimStart('v'))",
+            "--notes-file", "dist/release-notes.md"
+          )
+          if ($tag.Contains("-")) { $arguments += "--prerelease" }
+          gh @arguments
