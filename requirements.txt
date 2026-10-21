@@ -27,7 +27,7 @@ langchain-openai==1.1.14
 numpy==2.4.4
 pypdf==6.19.0
 pypdfium2==5.12.1
-pillow==12.3.0
+pillow==13.0.0
 
 # Retrieval reranker
 # install.ps1 selects the matching CPU/CUDA wheel from the official PyTorch index.

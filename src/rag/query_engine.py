@@ -1557,6 +1557,140 @@ def _translation_executor() -> concurrent.futures.ThreadPoolExecutor:
         return _translation_executor_instance
 
 
+_OVERVIEW_THEME_GROUPS = 8
+_OVERVIEW_EXAMPLE_TITLES = 3
+_OVERVIEW_CANDIDATES_PER_GROUP = 3
+_OVERVIEW_MIN_PASSAGE_CHARS = 300
+# Tables of contents, indexes and reference lists: what a topic-less query
+# such as "les thèmes de ma bibliothèque" matches ("bibliothèque" is close to
+# "bibliographie"), and nothing a theme can be read from.
+_OVERVIEW_NON_PROSE_RE = re.compile(
+    r"table des mati|\bcontents\b|sommaire|bibliograph|\bindex\b|\.{5,}|curriculum"
+)
+
+
+def _library_taxonomy_payload() -> dict[str, Any]:
+    """The theme tree of Cartographies; model "" shares its cache and the library's."""
+    from src.library_taxonomy import build_article_taxonomy_payload
+
+    return build_article_taxonomy_payload(model_name="")
+
+
+def _overview_tokens(text: Any) -> set[str]:
+    folded = unicodedata.normalize("NFKD", str(text or "").lower())
+    folded = "".join(char for char in folded if not unicodedata.combining(char))
+    return set(re.findall(r"[a-z0-9]{3,}", folded))
+
+
+def _overview_theme_note(label: str, size: int, titles: list[str]) -> str:
+    examples = " ; ".join(titles)
+    if _current_ui_language() == "en":
+        note = f"Group of {size} articles in the library, keywords: {label}."
+        return f"{note} Example titles: {examples}." if examples else note
+    note = f"Groupe de {size} articles de la bibliotheque, mots-cles : {label}."
+    return f"{note} Exemples de titres : {examples}." if examples else note
+
+
+def _overview_passage(title: str, path: str) -> Document | None:
+    """The best prose passage of one article: no table of contents, no index."""
+    scored = _collect_source_scored_docs(
+        f"{title} abstract introduction", k=8, source_paths=[path]
+    )
+    for doc, _score in sorted(scored, key=lambda item: item[1], reverse=True):
+        text = str(doc.page_content or "").strip()
+        if len(text) < _OVERVIEW_MIN_PASSAGE_CHARS:
+            continue
+        if _OVERVIEW_NON_PROSE_RE.search(text[:400].lower()):
+            continue
+        return doc
+    return None
+
+
+def _library_overview_documents(max_chunks: int) -> list[Document]:
+    """One passage per main theme of the library, from the Cartographies taxonomy.
+
+    "Quels sont les thèmes principaux de ma bibliothèque ?" has no topic to
+    search for: the vector search returned tables of contents and index pages,
+    and qwen3.5:2b answered that the themes could not be determined. The
+    largest groups of the theme tree each give one representative article's
+    passage, with the group's size and a few of its titles beside it (in the
+    context header, not in the passage the sources panel shows). Empty when
+    there is no taxonomy: the caller then searches as before.
+    """
+    started = time.perf_counter()
+    try:
+        payload = _library_taxonomy_payload()
+    except Exception:
+        _logger.warning("Library taxonomy unavailable for an overview question", exc_info=True)
+        return []
+    children = payload.get("children_by_parent") or {}
+    articles_by_node = payload.get("articles_by_concept") or {}
+    excluded_keys = excluded_path_keys()
+    groups: list[tuple[str, list[dict[str, Any]]]] = []
+    for node in payload.get("nodes") or []:
+        node_id = str(node.get("id") or "")
+        if not node_id or children.get(node_id):
+            continue
+        articles: list[dict[str, Any]] = []
+        seen_titles: set[str] = set()
+        for article in articles_by_node.get(node_id) or []:
+            path = str(article.get("path") or "").strip()
+            title = str(article.get("title") or "").strip()
+            title_key = _normalize_text(title) or path
+            if not path or is_metadata_excluded({"rel_path": path}, excluded_keys):
+                continue
+            # Two Zotero attachments of one paper are one article.
+            if title_key in seen_titles:
+                continue
+            seen_titles.add(title_key)
+            articles.append(article)
+        if articles:
+            groups.append((str(node.get("label") or "").strip(), articles))
+    groups.sort(key=lambda group: len(group[1]), reverse=True)
+
+    docs: list[Document] = []
+    used_titles: set[str] = set()
+    for label, articles in groups[: min(_OVERVIEW_THEME_GROUPS, max(1, max_chunks))]:
+        # Labels are keyword pairs ("Cable · AC Loss"): the title sharing most
+        # of them stands for the group.
+        label_tokens = _overview_tokens(label)
+        ranked = sorted(
+            enumerate(articles),
+            key=lambda item: (-len(label_tokens & _overview_tokens(item[1].get("title"))), item[0]),
+        )
+        for _, article in ranked[:_OVERVIEW_CANDIDATES_PER_GROUP]:
+            title = str(article.get("title") or "").strip()
+            if _normalize_text(title) in used_titles:
+                continue
+            passage = _overview_passage(title, str(article.get("path") or ""))
+            if passage is None:
+                continue
+            used_titles.add(_normalize_text(title))
+            examples = [
+                str(other.get("title") or "").strip()
+                for other in articles
+                if other is not article and str(other.get("title") or "").strip()
+            ][:_OVERVIEW_EXAMPLE_TITLES]
+            docs.append(
+                _clone_document_with_metadata(
+                    passage,
+                    {"library_theme_note": _overview_theme_note(label, len(articles), examples)},
+                )
+            )
+            break
+    _record_pipeline_metric(
+        "retrieval",
+        {
+            "duration_ms": _duration_ms(started),
+            "library_overview": True,
+            "taxonomy_groups": len(groups),
+            "returned": len(docs),
+            "taxonomy_cache_hit": bool((payload.get("stats") or {}).get("cache_hit")),
+        },
+    )
+    return docs
+
+
 def _retrieve_documents(
     query: str,
     threshold: float,
@@ -1584,7 +1718,15 @@ def _retrieve_documents(
             _retrieve_documents_single(query, threshold, max_chunks, filters, **single)
         )[:max_chunks]
 
-    if is_library_overview_request(query) or not _needs_english_retrieval_query(query):
+    if is_library_overview_request(query):
+        # Tags, collections or chosen articles narrow the library: the theme
+        # tree covers all of it, so those questions keep the search.
+        if not any((filters or {}).values()):
+            docs = _library_overview_documents(max_chunks)
+            if docs:
+                return docs
+        return searched_alone()
+    if not _needs_english_retrieval_query(query):
         return searched_alone()
     # The translation (0.3 s on CPU) runs while the French pool is searched.
     translation = _translation_executor().submit(_english_retrieval_query, query)
@@ -2173,6 +2315,12 @@ _ANAPHOR_WORDS = frozenset(
 )
 
 
+_NOT_A_QUESTION_WORDS = frozenset(
+    "test tests testing essai bonjour salut hello hi hey merci thanks thank you ok okay "
+    "d accord cool super parfait bien".split()
+)
+
+
 def _is_follow_up_question(message: str) -> bool:
     """Whether a question leans on the previous one ("Et à 4 K ?", "What are its limits?").
 
@@ -2186,6 +2334,10 @@ def _is_follow_up_question(message: str) -> bool:
     text = "".join(char for char in text if not unicodedata.combining(char))
     words = re.findall(r"[a-z0-9]+", text)
     if not words:
+        return False
+    # "test" or "merci" after the themes of the library re-ran the overview
+    # with the old question, and the model repeated its answer.
+    if all(word in _NOT_A_QUESTION_WORDS for word in words):
         return False
     joined = " ".join(words)
     if _FOLLOW_UP_OPENING_RE.match(joined) or len(words) <= 2:
@@ -2625,6 +2777,48 @@ def _localized_no_results_message(*, source_scoped: bool = False) -> str:
     )
 
 
+def _library_overview_task(message: str, docs: list[Document]) -> str:
+    """What a library-overview answer must do, outside the style guide.
+
+    The style guide is cut from qwen3.5 prompts (llm_provider), so these lines
+    never reached the default chat model when they lived there.
+    """
+    if not is_library_overview_request(message):
+        return ""
+    theme_groups = any((doc.metadata or {}).get("library_theme_note") for doc in docs)
+    if _current_ui_language() == "en":
+        lines = [
+            "Library-overview task: infer 2 to 4 recurring research themes across the retrieved excerpts.",
+            "Name each theme and briefly connect the representative sources that support it.",
+        ]
+        if theme_groups:
+            lines.append(
+                'Each source headed "Group of N articles in the library" stands for that whole group: '
+                "merge related groups into one theme and give the size of the groups it covers "
+                "(do not add sizes together). Do not summarize the sources one by one."
+            )
+        lines += [
+            "The source excerpts below are library context; do not claim that no library context was supplied.",
+            "Describe this as an overview of the indexed evidence, not a guaranteed exhaustive census of the library.",
+        ]
+    else:
+        lines = [
+            "Tache de vue d'ensemble de la bibliotheque: deduis 2 a 4 themes de recherche recurrents dans les extraits recuperes.",
+            "Nomme chaque theme et relie brievement les sources representatives qui le soutiennent.",
+        ]
+        if theme_groups:
+            lines.append(
+                'Chaque source precedee de "Groupe de N articles de la bibliotheque" represente tout ce groupe : '
+                "reunis les groupes proches en un meme theme et indique la taille des groupes qu'il couvre "
+                "(n'additionne pas les tailles). Ne resume pas les sources une par une."
+            )
+        lines += [
+            "Les extraits ci-dessous constituent bien le contexte de la bibliotheque; ne dis pas qu'aucun contexte n'a ete fourni.",
+            "Presente le resultat comme une vue d'ensemble des elements indexes, pas comme un recensement necessairement exhaustif.",
+        ]
+    return "\n".join(lines)
+
+
 def _build_response_style_guide(message: str, model_name: str | None = None) -> str:
     normalized = _normalize_text(message)
     deep_analysis = is_deep_article_analysis_request(message)
@@ -2714,25 +2908,6 @@ def _build_response_style_guide(message: str, model_name: str | None = None) -> 
             lines.append(
                 "Si la question est large, fais une synthese des 2 a 4 idees les plus importantes avant les details."
             )
-    if is_library_overview_request(message):
-        if _current_ui_language() == "en":
-            lines.extend(
-                [
-                    "Library-overview task: infer 2 to 4 recurring research themes across the retrieved excerpts.",
-                    "Name each theme and briefly connect the representative sources that support it.",
-                    "The source excerpts below are library context; do not claim that no library context was supplied.",
-                    "Describe this as an overview of the indexed evidence, not a guaranteed exhaustive census of the library.",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "Tache de vue d'ensemble de la bibliotheque: deduis 2 a 4 themes de recherche recurrents dans les extraits recuperes.",
-                    "Nomme chaque theme et relie brievement les sources representatives qui le soutiennent.",
-                    "Les extraits ci-dessous constituent bien le contexte de la bibliotheque; ne dis pas qu'aucun contexte n'a ete fourni.",
-                    "Presente le resultat comme une vue d'ensemble des elements indexes, pas comme un recensement necessairement exhaustif.",
-                ]
-            )
     model_note = sanitize_utf8_text(get_chat_response_note(model_name)).strip()
     if model_note:
         lines.extend(["", "Consignes specifiques au modele:", model_note])
@@ -2800,7 +2975,11 @@ def _format_context_for_direct_chat(docs: list[Document]) -> str:
         ).strip()
         page = str(metadata.get("page", "?")).strip() or "?"
         ref_label = _source_ref_label(doc, index)
-        parts.append(f"[{ref_label}] {title} | page {page}\n{text}")
+        header = f"[{ref_label}] {title} | page {page}"
+        theme_note = str(metadata.get("library_theme_note") or "").strip()
+        if theme_note:
+            header += f"\n{theme_note}"
+        parts.append(f"{header}\n{text}")
     return "\n\n".join(parts)
 
 
@@ -2822,6 +3001,10 @@ def grounding_passages(docs: list[Document]) -> list[str]:
                 metadata.get("zotero_year"),
             )
         )
+        theme_note = str(metadata.get("library_theme_note") or "").strip()
+        if theme_note:
+            # A group's size is a figure the answer may report.
+            paper = f"{paper}\n{theme_note}"
         passages.append(f"{paper}\n{getattr(doc, 'page_content', '') or ''}")
     return passages
 
@@ -2959,6 +3142,9 @@ def build_chat_messages(
     citation_guide = _build_source_citation_guide(citation_docs)
     if citation_guide:
         prompt_input += f"\n\n{citation_guide}"
+    overview_task = _library_overview_task(question, retrieved_docs)
+    if overview_task:
+        prompt_input += f"\n\n{overview_task}"
     if filter_summary:
         prompt_input += (
             "\n\nFiltres Zotero a respecter strictement: "
