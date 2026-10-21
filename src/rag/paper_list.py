@@ -524,8 +524,13 @@ def build_paper_list_markdown(
     *,
     summaries: dict[str, str] | None = None,
     language: str = "fr",
+    from_metadata: bool = False,
 ) -> str:
-    """Render one deterministic markdown item per deduplicated paper."""
+    """Render one deterministic markdown item per deduplicated paper.
+
+    ``from_metadata`` marks an exhaustive author lookup in the library
+    metadata, which the header must not present as a search of the RAG index.
+    """
     from src.rag.query_engine import _source_snippet_for_display
 
     language = _paper_list_language(language)
@@ -541,17 +546,30 @@ def build_paper_list_markdown(
             "Elargissez les filtres ou reformulez le sujet."
         )
 
-    if language == "en":
-        noun = "paper" if len(papers) == 1 else "papers"
-        lines = [
-            f"I found {len(papers)} {noun} in the expanded RAG index for: {user_query.strip()}",
-            "",
-        ]
+    count = len(papers)
+    plural = "s" if count > 1 else ""
+    if from_metadata:
+        header = _localized(
+            language,
+            en=(
+                f"The library metadata lists {count} indexed paper{plural} "
+                f"for: {user_query.strip()}"
+            ),
+            fr=(
+                f"Les metadonnees de la bibliotheque listent {count} article{plural} "
+                f"indexe{plural} pour : {user_query.strip()}"
+            ),
+        )
     else:
-        lines = [
-            f"J'ai retrouve {len(papers)} article{'s' if len(papers) > 1 else ''} dans l'index RAG elargi pour: {user_query.strip()}",
-            "",
-        ]
+        header = _localized(
+            language,
+            en=f"I found {count} paper{plural} in the expanded RAG index for: {user_query.strip()}",
+            fr=(
+                f"J'ai retrouve {count} article{plural} dans l'index RAG elargi pour: "
+                f"{user_query.strip()}"
+            ),
+        )
+    lines = [header, ""]
     for index, doc in enumerate(papers, start=1):
         metadata = getattr(doc, "metadata", {}) or {}
         label = _source_label(doc, index)
@@ -1035,7 +1053,9 @@ def _stream_author_metadata_list(
             ),
         )
     else:
-        markdown = build_paper_list_markdown(user_query, metadata_docs, language=language)
+        markdown = build_paper_list_markdown(
+            user_query, metadata_docs, language=language, from_metadata=True
+        )
         markdown += _already_listed_note(already_listed, language)
     yield from _paper_list_answer_events(
         markdown,

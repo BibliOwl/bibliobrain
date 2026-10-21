@@ -15,6 +15,21 @@ pour la modifier ; une ligne à compléter affiche un bouton **Configurer**, **P
   (détection automatique), ou choisir un fichier BibTeX.
 - **Lire les pages scannées** : rend consultables les PDF qui sont des photos de pages
   (voir [Premier lancement](Premier-lancement.md)).
+- **Changer d'ordinateur** : **Exporter…** enregistre dans un fichier .zip l'index de
+  recherche, vos PDF et leurs notices (titres, auteurs, tags, notes), sans vos conversations
+  ni vos clés API. Sur l'autre ordinateur, **Importer…** vérifie le fichier et dit ce qu'il
+  va faire ; un seul bouton télécharge si besoin le modèle qui manque, copie les PDF absents
+  puis installe l'index. Une barre montre l'avancement.
+  - Les PDF vont dans votre dossier de PDF. Sans dossier configuré, Bibliobrain crée
+    **Documents\Bibliobrain PDF** et l'utilise. Un fichier déjà présent n'est jamais remplacé.
+  - Si vos PDF sont dans le dossier de Zotero, ils n'y sont copiés que s'il s'agit de la
+    même bibliothèque Zotero synchronisée.
+  - Si ce PC n'a ni Zotero ni fichier BibTeX, les notices de l'archive deviennent la source
+    de métadonnées, sans rien réindexer. Vous pourrez connecter Zotero plus tard.
+  - **Voir le détail** montre la vérification complète. **Options** permet d'exporter sans
+    les PDF (fichier bien plus petit), de ne pas télécharger le modèle ou de garder vos
+    réglages.
+  - Un fichier de plus de 4 Go ne tient pas sur une clé USB formatée en FAT32.
 
 ### Assistant IA
 **Où l'IA doit-elle fonctionner ?**

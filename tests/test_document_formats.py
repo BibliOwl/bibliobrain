@@ -179,6 +179,77 @@ def test_archive_member_traversal_is_rejected(workspace_tmp_dir: Path) -> None:
         load_document_units(document)
 
 
+def _write_deck_with_member(path: Path, member: str, size: int) -> None:
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "ppt/slides/slide1.xml",
+            '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:p><a:r><a:t>Bobine testée</a:t></a:r></a:p></p:sld>',
+        )
+        archive.writestr(
+            "docProps/core.xml",
+            '<cp:coreProperties xmlns:cp="urn:cp" xmlns:dc="urn:dc"><dc:title>Essais</dc:title></cp:coreProperties>',
+        )
+        archive.writestr(member, bytes(size))
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        "ppt/media/media4.mp4",
+        # From a tester's log: a large spreadsheet pasted into a slide.
+        "ppt/embeddings/oleObject26.bin",
+        "ppt/embeddings/Microsoft_Excel_Worksheet3.xlsx",
+        "ppt/fonts/font1.fntdata",
+    ],
+)
+def test_pptx_with_large_embedded_payload_is_still_indexed(
+    workspace_tmp_dir: Path, member: str
+) -> None:
+    # A tester's decks held a 30 MB video and a large embedded object: the
+    # whole library scan stopped on them.
+    document = workspace_tmp_dir / "essais.pptx"
+    _write_deck_with_member(document, member, 30 * 1024 * 1024)
+
+    units = load_document_units(document)
+    metadata = extract_document_metadata(document)
+
+    assert [unit.text for unit in units] == ["Bobine testée"]
+    assert metadata is not None
+    assert metadata.title == "Essais"
+
+
+@pytest.mark.parametrize(
+    "member",
+    ["ppt/slides/slide2.xml", "ppt/media/hidden.xml", "ppt/embeddings/_rels/x.xml.rels"],
+)
+def test_oversized_text_part_still_rejected_but_metadata_never_raises(
+    workspace_tmp_dir: Path, member: str
+) -> None:
+    # A text part counts wherever it sits: the binary folders are no way round.
+    document = workspace_tmp_dir / "bombe.pptx"
+    _write_deck_with_member(document, member, 30 * 1024 * 1024)
+
+    with pytest.raises(DocumentFormatError, match="trop volumineux"):
+        load_document_units(document)
+    assert extract_document_metadata(document) is None
+
+
+def test_document_over_size_limit_does_not_stop_metadata_resolution(
+    workspace_tmp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.document_formats import resolve_document_metadata
+
+    monkeypatch.setenv("BIBLIOBRAIN_MAX_DOCUMENT_MB", "1")
+    document = workspace_tmp_dir / "enorme.pptx"
+    with zipfile.ZipFile(document, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("ppt/media/video.mp4", bytes(2 * 1024 * 1024))
+
+    with pytest.raises(DocumentFormatError, match="trop volumineux"):
+        load_document_units(document)
+    assert resolve_document_metadata("enorme.pptx", str(document), {}) is None
+
+
 def test_legacy_file_routes_support_non_pdf_documents(
     workspace_tmp_dir: Path,
     monkeypatch: pytest.MonkeyPatch,

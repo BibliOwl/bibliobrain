@@ -33,10 +33,11 @@ from src.zotero_db import (
     ZoteroItem,
     filter_active_zotero_pdf_entries,
     find_zotero_db,
-    find_zotero_storage,
     is_bibtex_source,
+    is_metadata_snapshot,
     load_zotero_library,
     load_zotero_user_library_uri,
+    suggest_zotero_pdf_folder,
 )
 
 _logger = logging.getLogger(__name__)
@@ -281,6 +282,56 @@ def _normalize_author_lookup(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _author_name_parts(value: str) -> tuple[str, tuple[str, ...]]:
+    """Split "Moreau, C. C." into ("moreau", ("c", "c")); "Jane Doe" into ("doe", ("jane",))."""
+    raw = str(value or "").strip()
+    if "," in raw:
+        last, _, first = raw.partition(",")
+    else:
+        words = raw.split()
+        last, first = (words[-1], " ".join(words[:-1])) if words else ("", "")
+    return _normalize_author_lookup(last), tuple(_normalize_author_lookup(first).split())
+
+
+def _matches_requested_author(candidate_author: str, requested: list[str]) -> bool:
+    # Token-wise: "etienne rochepault" must match "Rochepault, Etienne".
+    return any(
+        all(token in candidate_author for token in requested_author.split())
+        for requested_author in requested
+    )
+
+
+def _initials_compatible(given: tuple[str, ...], known: tuple[str, ...]) -> bool:
+    """Whether initials such as ("c", "c") can abbreviate known given names ("claire",).
+
+    Names are compared position by position; a middle initial missing on one
+    side does not rule the match out.
+    """
+    if not given or not known:
+        return False
+    return all(
+        token == reference or (len(token) == 1 and reference.startswith(token))
+        for token, reference in zip(given, known, strict=False)
+    )
+
+
+def _requested_author_variants(requested: list[str]) -> dict[str, set[tuple[str, ...]]]:
+    """Given names, by surname, of the library authors the request names in full.
+
+    Zotero often stores the same person as "Moreau, Claire" on one item and
+    "Moreau, C." on another: a search for "claire" must find both.
+    """
+    variants: dict[str, set[tuple[str, ...]]] = {}
+    for item in _iter_unique_items():
+        for value in item.authors:
+            if not _matches_requested_author(_normalize_author_lookup(value), requested):
+                continue
+            surname, given = _author_name_parts(value)
+            if surname and any(len(token) > 1 for token in given):
+                variants.setdefault(surname, set()).add(given)
+    return variants
+
+
 def find_library_articles_by_authors(
     authors: list[str],
     *,
@@ -312,6 +363,14 @@ def find_library_articles_by_authors(
             for candidate in _candidate_rel_paths(path)
         }
 
+    variants = _requested_author_variants(requested)
+
+    def _author_matches(value: str) -> bool:
+        if _matches_requested_author(_normalize_author_lookup(value), requested):
+            return True
+        surname, given = _author_name_parts(value)
+        return any(_initials_compatible(given, known) for known in variants.get(surname, ()))
+
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for rel_path, full_path in pdf_entries:
@@ -321,15 +380,7 @@ def find_library_articles_by_authors(
         if item is None:
             continue
         metadata_available = metadata_available or bool(item.authors)
-        candidate_authors = [
-            normalized for value in item.authors if (normalized := _normalize_author_lookup(value))
-        ]
-        # Token-wise: "etienne rochepault" must match "Rochepault, Etienne".
-        if not any(
-            all(token in candidate_author for token in requested_author.split())
-            for requested_author in requested
-            for candidate_author in candidate_authors
-        ):
+        if not any(_author_matches(value) for value in item.authors):
             continue
 
         stable_key = item.item_key or item.doi or _normalize_rel_path(rel_path)
@@ -421,10 +472,15 @@ def init_zotero(db_path: str = "") -> str:
                 for item in _zotero_library.values()
             }
         )
+        if source_is_bibtex and is_metadata_snapshot(db_path):
+            return f"Notices importees OK - {entry_count} entrees chargees."
         if source_is_bibtex:
             return f"BibTeX OK - {entry_count} entrees associees chargees."
-        storage_path = find_zotero_storage(db_path)
-        if storage_path:
+        storage_path = suggest_zotero_pdf_folder(db_path)
+        # Zotero's storage/ is only a default. A folder the user chose stays:
+        # with ZotMoov or linked files the PDFs live elsewhere, and storage/
+        # then holds only the leftovers (slides, videos) Zotero kept.
+        if storage_path and not get_app_settings().get("data_path_configured"):
             set_data_path(storage_path)
             return (
                 f"Zotero OK - {entry_count} entrees chargees. "

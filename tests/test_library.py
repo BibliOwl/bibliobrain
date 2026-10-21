@@ -121,6 +121,43 @@ def test_find_library_articles_by_authors_matches_any_author_without_rag(monkeyp
         library._zotero_library = original_library
 
 
+def test_find_library_articles_by_authors_matches_initials_of_a_known_name(monkeypatch) -> None:
+    """2026-10-21 report: "claire" missed the paper that stores "Moreau, C."."""
+    original_library = dict(library._zotero_library)
+    try:
+        library._zotero_library = {
+            "full.pdf": ZoteroItem(item_key="ITEM1", title="Full name", authors=["Moreau, Claire"]),
+            "initial.pdf": ZoteroItem(
+                item_key="ITEM2", title="Initial only", authors=["Example, Alice", "Moreau, C."]
+            ),
+            "double.pdf": ZoteroItem(item_key="ITEM3", title="Two initials", authors=["Moreau, C. C."]),
+            "other.pdf": ZoteroItem(item_key="ITEM4", title="Other person", authors=["Moreau, B."]),
+            "namesake.pdf": ZoteroItem(item_key="ITEM5", title="Namesake", authors=["Martin, C."]),
+        }
+        paths = [f"papers/{name}" for name in library._zotero_library]
+        monkeypatch.setattr(
+            library, "find_pdfs", lambda: [(path, f"X:/library/{path}") for path in paths]
+        )
+        monkeypatch.setattr(
+            library,
+            "filter_active_zotero_pdf_entries",
+            lambda entries, *_args, **_kwargs: entries,
+        )
+        monkeypatch.setattr(library, "get_indexed_rel_paths", lambda: set(paths))
+
+        for query in ("claire", "Claire Moreau"):
+            records, _ = library.find_library_articles_by_authors([query])
+            assert [record["title"] for record in records] == [
+                "Full name",
+                "Initial only",
+                "Two initials",
+            ]
+        # An initial alone, with no full name to anchor it, matches nothing new.
+        records, _ = library.find_library_articles_by_authors(["Alice Example"])
+        assert [record["title"] for record in records] == ["Initial only"]
+    finally:
+        library._zotero_library = original_library
+
 def test_list_library_extracts_pdf_metadata_without_external_source(
     workspace_tmp_dir,
     monkeypatch,

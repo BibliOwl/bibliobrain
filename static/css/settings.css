@@ -857,6 +857,24 @@
 .index-transfer-issues li.is-warning { border-color: rgba(245,158,11,0.3); background: rgba(245,158,11,0.06); }
 .index-transfer-issues li.is-error { border-color: rgba(244,63,94,0.35); background: rgba(244,63,94,0.08); }
 .index-transfer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.index-transfer-plan { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--text-2); font-size: 0.78em; line-height: 1.5; }
+.index-transfer-detail > summary { font-size: 0.78em; color: var(--accent-text); cursor: pointer; }
+.index-transfer-detail-body { display: grid; gap: 10px; margin-top: 10px; }
+.index-transfer-options { display: grid; gap: 12px; padding: 14px 18px 16px; }
+.index-transfer-options-note { margin: 0; color: var(--muted); font-size: 0.74em; line-height: 1.5; }
+.index-transfer-options-group { color: var(--muted); font-size: 0.7em; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+.index-transfer-options-group:not(:first-child) { margin-top: 4px; }
+.index-transfer-estimate { color: var(--muted); }
+.index-transfer-progress { display: grid; gap: 6px; margin: 0 18px 14px; }
+.index-transfer-progress-bar { height: 6px; border-radius: 999px; background: var(--glass-2); overflow: hidden; }
+.index-transfer-progress-bar > span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent-2); transition: width 300ms ease; }
+.index-transfer-progress-bar.is-indeterminate > span { width: 30%; animation: index-transfer-slide 1.2s ease-in-out infinite; }
+@keyframes index-transfer-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) {
+  .index-transfer-progress-bar > span { transition: none; }
+  .index-transfer-progress-bar.is-indeterminate > span { animation: none; width: 100%; opacity: 0.5; }
+}
+.index-transfer-progress-text { color: var(--text-2); font-size: 0.75em; font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) {
   .index-transfer-grid { grid-template-columns: 1fr; }
 }
@@ -2072,3 +2090,11 @@
   cursor: pointer;
 }
 .startup-update-choice input { margin-top: 2px; }
+.startup-import-hint {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-2);
+  color: var(--muted);
+  font-size: 0.82em;
+}
+.startup-import-note { display: block; margin-top: 4px; font-size: 0.92em; }

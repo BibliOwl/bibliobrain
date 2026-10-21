@@ -42,7 +42,7 @@ from src.library import (
 from src.llm_provider import public_provider_info
 from src.notebooks import clear_all_notebooks
 from src.rag_settings import get_persisted_chunk_size, set_persisted_chunk_size
-from src.zotero_db import find_zotero_storage, is_bibtex_source
+from src.zotero_db import is_bibtex_source, suggest_zotero_pdf_folder
 
 _logger = logging.getLogger(__name__)
 
@@ -410,7 +410,7 @@ def api_zotero_load(req: ZoteroLoadRequest):
     )
     storage = None
     if ok and req.path and not is_bibtex_source(req.path):
-        storage = find_zotero_storage(req.path)
+        storage = suggest_zotero_pdf_folder(req.path)
     rows, paths = list_library(indexed_only=True)
     payload = {
         "ok": ok,

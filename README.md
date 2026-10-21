@@ -143,9 +143,7 @@ Read the wiki in [English](wiki/Home-en.md) or [French](wiki/Home.md).
 - [Backups, maintenance and uninstallation](wiki/Maintenance-en.md)
 - [Changelog](CHANGELOG.md)
 
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). The application to SignPath Foundation is under review: until it is accepted, releases are unsigned. Only the Windows installer (`Bibliobrain-Setup-X.Y.Z.exe`) is signed, and only when built from this repository by the [release workflow](.github/workflows/release.yml) on GitHub Actions.
+## Maintainer
 
 Team roles: the project has a single maintainer, [bibliOwl](https://github.com/bibliOwl), who is committer, reviewer and approver. Contributions from others are reviewed and merged by the maintainer (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 

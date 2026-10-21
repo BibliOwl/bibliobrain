@@ -8,6 +8,12 @@ no absolute path. Before anything is replaced, ``inspect_archive`` compares
 that header with this computer, so the user learns which documents are
 missing, which ones the next reload will re-embed, and which embedding model
 must be installed.
+
+Format 2 may also carry the indexed documents themselves under
+``documents/<rel_path>``, with their size and SHA-256 in the header. An
+archive without documents is still written as format 1, so older versions
+of Bibliobrain keep reading it. On import, a document is only ever copied
+where none exists yet: nothing on this computer is overwritten.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 import uuid
 import zipfile
@@ -39,16 +46,20 @@ from src.llm_provider import (
     set_runtime_embedding_model,
 )
 from src.rag_settings import get_persisted_chunk_size, set_persisted_chunk_size
-from src.rel_paths import candidate_rel_paths
+from src.rel_paths import candidate_rel_paths, normalize_rel_path
 from src.visual_analysis import index_visual_signature
 from src.zotero_db import (
+    METADATA_SNAPSHOT_FORMAT,
     ZoteroItem,
     filter_active_zotero_pdf_entries,
     find_zotero_db,
     is_zotero_storage_path,
+    item_to_snapshot,
     load_zotero_library,
     load_zotero_user_library_uri,
     lookup_zotero_item,
+    snapshot_items,
+    write_metadata_snapshot,
 )
 
 from . import state
@@ -68,9 +79,70 @@ from .vector_store import (
 from .zotero_integration import _file_signature, _normalize_text, _zotero_signature
 
 ARCHIVE_FORMAT = "bibliobrain-index"
-ARCHIVE_FORMAT_VERSION = 1
+ARCHIVE_FORMAT_VERSION = 2
+_INDEX_ONLY_FORMAT_VERSION = 1
 HEADER_NAME = "bibliobrain-index.json"
 _INDEX_PREFIX = "index/"
+_DOCUMENTS_PREFIX = "documents/"
+# Created in the user's Documents folder when this computer has no PDF folder yet.
+DEFAULT_IMPORT_FOLDER_NAME = "Bibliobrain PDF"
+_PART_SUFFIX = ".bibliobrain-part"
+# zipfile needs to know in advance that a streamed member will pass 2 GiB.
+_ZIP64_MEMBER_BYTES = 2**31 - 2**26
+_COPY_MODES = {"new_folder", "data_path", "zotero_storage"}
+# Records of the indexed documents, used where this computer has no metadata source.
+_METADATA_NAME = "metadata.json"
+_SNAPSHOT_DIR_NAME = "imported_metadata"
+
+
+# ------ Progress ------------------------------------------------
+# One transfer runs at a time (they hold the RAG lock); the UI polls this
+# state while its request is in flight.
+
+_progress_lock = threading.Lock()
+_progress: dict[str, Any] = {"active": False}
+
+
+def transfer_progress() -> dict[str, Any]:
+    with _progress_lock:
+        return dict(_progress)
+
+
+def _progress_begin(operation: str) -> None:
+    with _progress_lock:
+        _progress.clear()
+        _progress.update(
+            active=True, operation=operation, phase="", done=0, total=0, label="", started_at=time.time()
+        )
+
+
+def _progress_update(phase: str, done: int, total: int, label: str = "") -> None:
+    with _progress_lock:
+        if _progress.get("active"):
+            _progress.update(phase=phase, done=int(done), total=int(total), label=label)
+
+
+def _progress_end() -> None:
+    with _progress_lock:
+        _progress.clear()
+        _progress["active"] = False
+
+
+class _ByteCounter:
+    """Bytes done within one phase, reported at most every 4 MB."""
+
+    def __init__(self, phase: str, total: int) -> None:
+        self.phase = phase
+        self.total = total
+        self.done = 0
+        self._reported = 0
+        _progress_update(phase, 0, total)
+
+    def add(self, count: int, label: str = "") -> None:
+        self.done += count
+        if self.done - self._reported >= 4 * 1024 * 1024 or self.done >= self.total:
+            self._reported = self.done
+            _progress_update(self.phase, self.done, self.total, label)
 _SQLITE_SUFFIXES = (".sqlite3", ".sqlite", ".db")
 # SQLite side files are folded into the snapshot; lock files are per process.
 _SKIPPED_SUFFIXES = ("-wal", "-shm", "-journal", ".lock")
@@ -147,8 +219,10 @@ def _zotero_account(source: str, path: str) -> tuple[str, str]:
     return hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16], kind
 
 
-def _document_identity(rel_path: str, library: dict[str, ZoteroItem]) -> dict[str, str]:
-    item = lookup_zotero_item(rel_path, library)
+def _document_identity(
+    rel_path: str, library: dict[str, ZoteroItem], full_path: str = ""
+) -> dict[str, str]:
+    item = lookup_zotero_item(rel_path, library, full_path or None)
     if item is None:
         return {"key": "", "sig": "", "title": ""}
     return {
@@ -282,14 +356,51 @@ def embedding_compatibility(index_info: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def pull_embedding_model(model_name: str) -> None:
-    """Download an embedding model into the local Ollama (can take minutes)."""
+def _pull_events(base_url: str, model_name: str) -> Any:
+    """Ollama's streamed pull: one JSON object per line."""
+    import ssl
+    import urllib.request
+
     from src.llm_provider import (
-        _embedding_ollama_base_url,
         _ollama_headers,
         _ollama_httpx_verify,
-        _open_url_json,
+        _open_request_with_local_proxy_bypass,
     )
+
+    request = urllib.request.Request(
+        f"{base_url}/api/pull",
+        data=json.dumps({"model": model_name, "stream": True}).encode("utf-8"),
+        headers=_ollama_headers(include_json_content_type=True),
+        method="POST",
+    )
+    verify = _ollama_httpx_verify()
+    context = None
+    if isinstance(verify, str):
+        context = ssl.create_default_context(cafile=verify)
+    elif not verify:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    # The timeout applies to each read: Ollama sends a line at least every few seconds.
+    with _open_request_with_local_proxy_bypass(request, timeout=300, context=context) as response:
+        for raw in response:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict):
+                yield event
+
+
+def pull_embedding_model(model_name: str) -> None:
+    """Download an embedding model into the local Ollama (can take minutes).
+
+    The download's progress (bytes of all layers) is published for the UI.
+    """
+    from src.llm_provider import _embedding_ollama_base_url
     from src.ollama_utils import is_local_ollama_url
 
     base_url = _embedding_ollama_base_url().rstrip("/")
@@ -298,15 +409,23 @@ def pull_embedding_model(model_name: str) -> None:
             "local_ollama_required",
             "Le téléchargement automatique exige un Ollama installé sur ce PC.",
         )
+    layers: dict[str, tuple[int, int]] = {}
+    succeeded = False
+    _progress_begin("pull")
     try:
-        _open_url_json(
-            f"{base_url}/api/pull",
-            method="POST",
-            json_payload={"model": model_name, "stream": False},
-            headers=_ollama_headers(include_json_content_type=True),
-            timeout=3600,
-            ssl_verify=_ollama_httpx_verify(),
-        )
+        _progress_update("download", 0, 0, model_name)
+        for event in _pull_events(base_url, model_name):
+            if event.get("error"):
+                raise RuntimeError(str(event["error"]))
+            digest = str(event.get("digest") or "")
+            if digest and event.get("total"):
+                layers[digest] = (int(event.get("completed") or 0), int(event["total"]))
+            done = sum(completed for completed, _total in layers.values())
+            total = sum(size for _completed, size in layers.values())
+            _progress_update("download", done, total, model_name)
+            succeeded = succeeded or event.get("status") == "success"
+        if not succeeded:
+            raise RuntimeError("téléchargement interrompu")
     except Exception as exc:
         _logger.warning("Ollama pull failed for %s", model_name, exc_info=True)
         raise IndexTransferError(
@@ -314,6 +433,8 @@ def pull_embedding_model(model_name: str) -> None:
             f"Téléchargement de {model_name} impossible ({exc}). "
             f"Essayez dans un terminal : ollama pull {model_name}",
         ) from exc
+    finally:
+        _progress_end()
 
 
 # ------ Export --------------------------------------------------
@@ -357,18 +478,41 @@ def _index_files(index_dir: Path) -> list[tuple[Path, str]]:
     return files
 
 
-def default_export_name() -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", _normalize_text(required_embedding_model_name())).strip("-")
-    stamp = datetime.now().strftime("%Y-%m-%d")
-    return f"Bibliobrain-index-{slug[:40] or 'embedding'}-{stamp}.zip"
+def _safe_rel_path(rel_path: str) -> str:
+    """``rel_path`` as a safe relative POSIX path inside an archive, or ""."""
+    normalized = normalize_rel_path(rel_path)
+    pure = PurePosixPath(normalized)
+    if (
+        not normalized
+        or pure.is_absolute()
+        or ".." in pure.parts
+        or ":" in normalized
+        or not pure.parts
+    ):
+        return ""
+    return pure.as_posix()
 
 
-def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
-    """Write the active, complete index profile to a zip archive."""
-    output = Path(output_path).expanduser().resolve()
-    if output.suffix.lower() != ".zip":
-        raise IndexTransferError("invalid_extension", "L'export doit être un fichier .zip.")
+def _exportable_documents(entries: dict[str, Any]) -> list[tuple[str, str, Path, int]]:
+    """(manifest key, path in the archive, local file, size) of the indexed files found here."""
+    data_path = str(config.DATA_PATH or "")
+    if not data_path or not os.path.isdir(data_path):
+        return []
+    rows: list[tuple[str, str, Path, int]] = []
+    for rel_path in sorted(entries):
+        safe = _safe_rel_path(rel_path)
+        full_path = _locate_document(rel_path, data_path) if safe else ""
+        if not full_path:
+            continue
+        try:
+            size = os.path.getsize(full_path)
+        except OSError:
+            continue
+        rows.append((rel_path, safe, Path(full_path), size))
+    return rows
 
+
+def _ready_index_dir() -> tuple[dict[str, Any], Path]:
     status = get_vector_database_status()
     if not status.get("profile_ready"):
         raise IndexTransferError(
@@ -376,7 +520,103 @@ def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
             "Aucun index complet pour le modèle d'embedding actuel. "
             "Préparez d'abord vos articles, puis exportez.",
         )
-    index_dir = Path(str(status["current_profile_path"]))
+    return status, Path(str(status["current_profile_path"]))
+
+
+def estimate_export() -> dict[str, Any]:
+    """Sizes of an export with and without the documents, before choosing where to save."""
+    _status, index_dir = _ready_index_dir()
+    entries: dict[str, Any] = _read_manifest(index_dir)["entries"]
+    documents = _exportable_documents(entries)
+    index_bytes = 0
+    for path, _relative in _index_files(index_dir):
+        with contextlib.suppress(OSError):
+            index_bytes += path.stat().st_size
+    return {
+        "document_count": len(entries),
+        "documents_found": len(documents),
+        "documents_bytes": sum(size for *_rest, size in documents),
+        "index_bytes": index_bytes,
+    }
+
+
+def _zip_time(path: Path) -> tuple[int, int, int, int, int, int]:
+    try:
+        stamp = time.localtime(path.stat().st_mtime)
+    except (OSError, OverflowError, ValueError):
+        stamp = time.localtime()
+    moment = (stamp.tm_year, stamp.tm_mon, stamp.tm_mday, stamp.tm_hour, stamp.tm_min, stamp.tm_sec)
+    # Zip dates start in 1980.
+    return max(moment, (1980, 1, 1, 0, 0, 0))
+
+
+def _store_document(
+    archive: zipfile.ZipFile,
+    member: str,
+    source: Any,
+    path: Path,
+    size: int,
+    counter: _ByteCounter | None = None,
+) -> str:
+    """Copy an open file into the archive uncompressed (PDFs already are); returns its SHA-256."""
+    info = zipfile.ZipInfo(member, date_time=_zip_time(path))
+    info.compress_type = zipfile.ZIP_STORED
+    digest = hashlib.sha256()
+    with archive.open(info, "w", force_zip64=size >= _ZIP64_MEMBER_BYTES) as target:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+            target.write(chunk)
+            if counter is not None:
+                counter.add(len(chunk), path.name)
+    return digest.hexdigest()
+
+
+def _metadata_records(
+    entries: dict[str, Any], library: dict[str, ZoteroItem]
+) -> dict[str, dict[str, Any]]:
+    """The full record of each indexed document, for a computer without that library."""
+    records: dict[str, dict[str, Any]] = {}
+    data_path = str(config.DATA_PATH or "")
+    for rel_path in entries:
+        # The full path finds linked files (ZotMoov) whose name several records share.
+        full_path = _locate_document(rel_path, data_path) or None
+        item = lookup_zotero_item(rel_path, library, full_path)
+        if item is not None:
+            records[rel_path] = item_to_snapshot(item)
+    return records
+
+
+def default_export_name() -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", _normalize_text(required_embedding_model_name())).strip("-")
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    return f"Bibliobrain-index-{slug[:40] or 'embedding'}-{stamp}.zip"
+
+
+def export_active_index(
+    output_path: str | os.PathLike[str], *, include_documents: bool = False
+) -> dict[str, Any]:
+    """Write the active, complete index profile to a zip archive.
+
+    With ``include_documents`` the indexed files found on this computer travel
+    too, so the other computer needs nothing else. The records of the indexed
+    documents always do (``metadata.json``): a computer without the same
+    library uses them instead of re-indexing everything.
+    """
+    _progress_begin("export")
+    try:
+        return _export_active_index(output_path, include_documents=include_documents)
+    finally:
+        _progress_end()
+
+
+def _export_active_index(
+    output_path: str | os.PathLike[str], *, include_documents: bool
+) -> dict[str, Any]:
+    output = Path(output_path).expanduser().resolve()
+    if output.suffix.lower() != ".zip":
+        raise IndexTransferError("invalid_extension", "L'export doit être un fichier .zip.")
+
+    status, index_dir = _ready_index_dir()
     if _is_within(output, Path(status["path"])):
         raise IndexTransferError(
             "invalid_destination",
@@ -392,9 +632,15 @@ def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
     account_id, account_kind = _zotero_account(source, metadata_path)
     model_name = required_embedding_model_name()
     chunk_size = int(manifest.get("chunk_size") or _current_chunk_size())
+    documents = _exportable_documents(entries) if include_documents else []
+    if documents and _is_within(output, Path(str(config.DATA_PATH))):
+        raise IndexTransferError(
+            "invalid_destination",
+            "Choisissez un emplacement hors du dossier de vos PDF : l'export les contient.",
+        )
     header: dict[str, Any] = {
         "format": ARCHIVE_FORMAT,
-        "format_version": ARCHIVE_FORMAT_VERSION,
+        "format_version": ARCHIVE_FORMAT_VERSION if documents else _INDEX_ONLY_FORMAT_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "application_version": _application_version(),
         "index": {
@@ -418,8 +664,24 @@ def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
             "zotero_storage_layout": is_zotero_storage_path(config.DATA_PATH, metadata_path),
             "item_count": len({item.item_key for item in library.values() if item.item_key}),
         },
-        "documents": {rel_path: _document_identity(rel_path, library) for rel_path in entries},
+        "documents": {
+            rel_path: _document_identity(
+                rel_path, library, _locate_document(rel_path, str(config.DATA_PATH or ""))
+            )
+            for rel_path in entries
+        },
     }
+    records = _metadata_records(entries, library)
+    if records:
+        header["format_version"] = ARCHIVE_FORMAT_VERSION
+        header["metadata"] = {"count": len(records)}
+    files: dict[str, dict[str, Any]] = {}
+    index_files = _index_files(index_dir)
+    total_bytes = sum(size for *_rest, size in documents)
+    for path, _relative in index_files:
+        with contextlib.suppress(OSError):
+            total_bytes += path.stat().st_size
+    counter = _ByteCounter("export", total_bytes)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -434,8 +696,7 @@ def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
                 temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True
             ) as archive,
         ):
-            archive.writestr(HEADER_NAME, json.dumps(header, ensure_ascii=False, indent=2))
-            for path, relative in _index_files(index_dir):
+            for path, relative in index_files:
                 if path.name.lower().endswith(_SQLITE_SUFFIXES):
                     snapshot = Path(snapshot_dir) / f"{uuid.uuid4().hex}.sqlite3"
                     _sqlite_snapshot(path, snapshot)
@@ -443,6 +704,31 @@ def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
                     snapshot.unlink()
                 else:
                     archive.write(path, _INDEX_PREFIX + relative)
+                with contextlib.suppress(OSError):
+                    counter.add(path.stat().st_size)
+            for rel_path, safe_path, path, size in documents:
+                try:
+                    document = path.open("rb")
+                except OSError:
+                    _logger.warning("Document left out of the export: %s", path, exc_info=True)
+                    continue
+                with document:
+                    digest = _store_document(
+                        archive, _DOCUMENTS_PREFIX + safe_path, document, path, size, counter
+                    )
+                    written = document.tell()
+                files[rel_path] = {"path": safe_path, "bytes": written, "sha256": digest}
+            if files:
+                header["files"] = files
+            if records:
+                archive.writestr(
+                    _METADATA_NAME,
+                    json.dumps({"format": METADATA_SNAPSHOT_FORMAT, "items": records}, ensure_ascii=False),
+                )
+            if not files and not records:
+                header["format_version"] = _INDEX_ONLY_FORMAT_VERSION
+            # Written last: it lists the documents that actually made it in.
+            archive.writestr(HEADER_NAME, json.dumps(header, ensure_ascii=False, indent=2))
         os.replace(temporary, output)
     except BaseException:
         temporary.unlink(missing_ok=True)
@@ -453,6 +739,9 @@ def export_active_index(output_path: str | os.PathLike[str]) -> dict[str, Any]:
         "bytes": output.stat().st_size,
         "document_count": header["index"]["document_count"],
         "chunk_count": header["index"]["chunk_count"],
+        "documents_included": len(files),
+        "documents_bytes": sum(int(item["bytes"]) for item in files.values()),
+        "records_included": len(records),
         "embedding_model": model_name,
         "chunk_size": chunk_size,
     }
@@ -470,10 +759,16 @@ def _read_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         members = archive.infolist()
         names = {info.filename for info in members}
+        sizes = {info.filename: info.file_size for info in members}
         for info in members:
             pure = PurePosixPath(info.filename)
             unsafe = pure.is_absolute() or ".." in pure.parts or "\\" in info.filename
-            if unsafe or not (info.filename == HEADER_NAME or info.filename.startswith(_INDEX_PREFIX)):
+            known = (
+                info.filename in {HEADER_NAME, _METADATA_NAME}
+                or info.filename.startswith(_INDEX_PREFIX)
+                or info.filename.startswith(_DOCUMENTS_PREFIX)
+            )
+            if unsafe or not known:
                 raise IndexTransferError(
                     "not_an_index", "Ce fichier n'est pas un index exporté par Bibliobrain."
                 )
@@ -486,11 +781,18 @@ def _read_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
         try:
             header = json.loads(archive.read(HEADER_NAME).decode("utf-8"))
             manifest = json.loads(archive.read(_INDEX_PREFIX + state._MANIFEST_FILE).decode("utf-8"))
+            records_payload = (
+                json.loads(archive.read(_METADATA_NAME).decode("utf-8"))
+                if _METADATA_NAME in names
+                else None
+            )
         except (KeyError, UnicodeError, ValueError) as exc:
             raise IndexTransferError("corrupted_archive", "L'archive est incomplète.") from exc
         if _INDEX_PREFIX + "chroma.sqlite3" not in names:
             raise IndexTransferError("corrupted_archive", "L'archive ne contient pas de base Chroma.")
-        uncompressed = sum(info.file_size for info in members)
+        uncompressed = sum(
+            info.file_size for info in members if not info.filename.startswith(_DOCUMENTS_PREFIX)
+        )
 
     if not isinstance(header, dict) or header.get("format") != ARCHIVE_FORMAT:
         raise IndexTransferError("not_an_index", "Ce fichier n'est pas un index Bibliobrain.")
@@ -520,7 +822,48 @@ def _read_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
         "library": header.get("library") if isinstance(header.get("library"), dict) else {},
         "documents": documents if isinstance(documents, dict) else {},
         "entries": entries,
+        "files": _archive_files(header, names, sizes),
+        "records": _archive_records(records_payload),
     }
+
+
+def _archive_records(payload: Any) -> dict[str, dict[str, Any]]:
+    """The archive's records, checked by rebuilding them as a library."""
+    if payload is None:
+        return {}
+    try:
+        snapshot_items(payload)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise IndexTransferError("corrupted_archive", "Les notices de l'archive sont illisibles.") from exc
+    items = payload.get("items")
+    return {str(key): value for key, value in items.items() if isinstance(value, dict)} if isinstance(items, dict) else {}
+
+
+def _archive_files(
+    header: dict[str, Any], names: set[str], sizes: dict[str, int]
+) -> dict[str, dict[str, Any]]:
+    """The documents carried by the archive, each matched to its zip member.
+
+    Every ``documents/`` member must be listed in the header with a safe path,
+    so nothing unannounced is ever written on this computer.
+    """
+    listed = header.get("files") or {}
+    if not isinstance(listed, dict):
+        raise IndexTransferError("corrupted_archive", "L'en-tête de l'archive est invalide.")
+    files: dict[str, dict[str, Any]] = {}
+    for rel_path, item in listed.items():
+        if not isinstance(item, dict):
+            raise IndexTransferError("corrupted_archive", "L'en-tête de l'archive est invalide.")
+        safe = _safe_rel_path(str(item.get("path") or ""))
+        member = _DOCUMENTS_PREFIX + safe
+        digest = str(item.get("sha256") or "")
+        if not safe or member not in names or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise IndexTransferError("corrupted_archive", "L'en-tête de l'archive est invalide.")
+        files[str(rel_path)] = {"path": safe, "member": member, "bytes": sizes[member], "sha256": digest}
+    announced = {item["member"] for item in files.values()}
+    if any(name.startswith(_DOCUMENTS_PREFIX) and name not in announced for name in names):
+        raise IndexTransferError("corrupted_archive", "L'archive contient des fichiers non annoncés.")
+    return files
 
 
 def read_index_info(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
@@ -528,8 +871,8 @@ def read_index_info(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
     return _read_archive(archive_path)["index"]
 
 
-def _free_bytes() -> int:
-    candidate = Path(_index_profiles_root())
+def _free_bytes(location: str | os.PathLike[str] | None = None) -> int:
+    candidate = Path(location if location is not None else _index_profiles_root())
     while not candidate.exists() and candidate.parent != candidate:
         candidate = candidate.parent
     try:
@@ -571,12 +914,119 @@ def _document_row(rel_path: str, identity: dict[str, Any]) -> dict[str, str]:
     return {"rel_path": rel_path, "title": title}
 
 
+def default_import_folder() -> str:
+    documents = Path.home() / "Documents"
+    return str((documents if documents.is_dir() else Path.home()) / DEFAULT_IMPORT_FOLDER_NAME)
+
+
+def _data_path_configured() -> bool:
+    data_path = str(config.DATA_PATH or "")
+    if not data_path or not os.path.isdir(data_path):
+        return False
+    try:
+        return bool(get_app_settings().get("data_path_configured", True))
+    except (OSError, TypeError, ValueError):
+        return True
+
+
+def plan_document_copy(
+    files: dict[str, dict[str, Any]], library_report: dict[str, Any]
+) -> dict[str, Any]:
+    """Where the archive's documents would go on this computer, and which ones.
+
+    ``mode``: ``none`` (no documents in the archive), ``new_folder`` (no PDF
+    folder here yet: one is created in Documents), ``data_path`` (the PDF
+    folder), ``zotero_storage`` (Zotero's storage folder of the same synced
+    library) or ``zotero_other_library`` (Zotero's storage of another library:
+    nothing is copied there, it would leave files Zotero does not know).
+    """
+    plan: dict[str, Any] = {
+        "included_count": len(files),
+        "included_bytes": sum(int(item["bytes"]) for item in files.values()),
+        "mode": "none",
+        "target": "",
+        "set_data_path": False,
+        "copy_count": 0,
+        "copy_bytes": 0,
+        "free_bytes": -1,
+        "disk_ok": True,
+        "rel_paths": [],
+    }
+    if not files:
+        return plan
+    data_path = str(config.DATA_PATH or "")
+    if not _data_path_configured():
+        plan.update(mode="new_folder", target=default_import_folder(), set_data_path=True)
+    elif library_report.get("current_storage_layout"):
+        same = library_report.get("same_account") is True
+        plan.update(mode="zotero_storage" if same else "zotero_other_library", target=data_path)
+    else:
+        plan.update(mode="data_path", target=data_path)
+    if plan["mode"] not in _COPY_MODES:
+        return plan
+    target_exists = os.path.isdir(plan["target"])
+    for rel_path, item in sorted(files.items()):
+        if target_exists and _locate_document(rel_path, plan["target"]):
+            continue
+        plan["rel_paths"].append(rel_path)
+        plan["copy_bytes"] += int(item["bytes"])
+    plan["copy_count"] = len(plan["rel_paths"])
+    plan["free_bytes"] = _free_bytes(plan["target"])
+    # A small margin for the file system's own bookkeeping.
+    required = int(plan["copy_bytes"] * 1.02)
+    plan["disk_ok"] = plan["free_bytes"] < 0 or plan["free_bytes"] >= required
+    return plan
+
+
+def plan_records(records: dict[str, Any], library_report: dict[str, Any]) -> dict[str, Any]:
+    """Whether the archive's records will serve as this computer's metadata source.
+
+    Only when no source is configured here: a Zotero library or a BibTeX file
+    of this computer always wins.
+    """
+    use = bool(records) and library_report.get("current_source") not in {"zotero", "bibtex"}
+    return {"count": len(records), "use": use}
+
+
+def _records_library(records: dict[str, Any]) -> dict[str, ZoteroItem]:
+    return snapshot_items({"format": METADATA_SNAPSHOT_FORMAT, "items": records})
+
+
+def _adopt_records(records: dict[str, Any], archive_name: str) -> str:
+    """Save the records as a file and make it the metadata source, like a BibTeX file."""
+    from src.app_settings import set_app_settings
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = str(Path(config.STORAGE_DIR) / _SNAPSHOT_DIR_NAME / f"notices-{stamp}.json")
+    write_metadata_snapshot(path, records, origin=archive_name)
+    config.set_zotero_path(path)
+    try:
+        set_app_settings(metadata_source="bibtex", zotero_path=path)
+    except Exception:
+        _logger.warning("Unable to save the imported records as metadata source", exc_info=True)
+    return path
+
+
+def _public_copy_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in plan.items() if key != "rel_paths"}
+
+
 def analyze_documents(
     entries: dict[str, dict[str, Any]],
     identities: dict[str, Any],
     library: dict[str, ZoteroItem],
+    *,
+    data_path: str | None = None,
+    incoming: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    data_path = str(config.DATA_PATH or "")
+    """Compare the index with the documents of ``data_path`` (the PDF folder).
+
+    ``incoming`` lists the archive's documents that the import will copy
+    there: they count as present, identical to their archived version.
+    """
+    current_folder = str(config.DATA_PATH or "")
+    data_path = current_folder if data_path is None else str(data_path or "")
+    incoming = incoming or {}
     data_path_exists = bool(data_path) and os.path.isdir(data_path)
     visual_signature = index_visual_signature()
     missing: list[dict[str, str]] = []
@@ -586,21 +1036,33 @@ def analyze_documents(
     visual_changed = 0
     reindexed: set[str] = set()
     found = 0
+    copied = 0
 
     for rel_path, entry in entries.items():
         raw_identity = identities.get(rel_path)
         identity: dict[str, Any] = raw_identity if isinstance(raw_identity, dict) else {}
         row = _document_row(rel_path, identity)
         full_path = _locate_document(rel_path, data_path) if data_path_exists else ""
-        if not full_path:
+        arriving = incoming.get(rel_path) if not full_path else None
+        if not full_path and arriving is None:
             missing.append(row)
             continue
-        found += 1
-        if not _content_matches(full_path, str(entry.get("file_sig") or "")):
+        if arriving is not None:
+            copied += 1
+            file_sig = str(entry.get("file_sig") or "")
+            same_content = file_sig == f"{arriving['bytes']}:sha256:{arriving['sha256']}" or (
+                # Pre-hash manifests stored size:mtime; the reload accepts a size match.
+                len(file_sig.split(":")) == 2 and file_sig.split(":")[0] == str(arriving["bytes"])
+            )
+            full_path = rel_path
+        else:
+            found += 1
+            same_content = _content_matches(full_path, str(entry.get("file_sig") or ""))
+        if not same_content:
             content_changed.append(row)
             reindexed.add(rel_path)
         exported_sig = str(identity.get("sig") or "")
-        item = lookup_zotero_item(rel_path, library)
+        item = lookup_zotero_item(rel_path, library, full_path)
         local_sig = _zotero_signature(item) if item else ""
         if exported_sig and item is None:
             not_in_metadata += 1
@@ -616,7 +1078,7 @@ def analyze_documents(
         candidate.lower() for rel_path in entries for candidate in candidate_rel_paths(rel_path)
     }
     new_local = 0
-    if data_path_exists:
+    if data_path_exists and data_path == current_folder:
         # Same candidate list as the reload: trashed Zotero attachments are skipped.
         local_documents = filter_active_zotero_pdf_entries(
             state.find_documents(),
@@ -633,6 +1095,7 @@ def analyze_documents(
         "data_path_exists": data_path_exists,
         "total": len(entries),
         "found": found,
+        "copied_count": copied,
         "missing_count": len(missing),
         "missing": missing[:_LISTED_DOCUMENTS],
         "content_changed_count": len(content_changed),
@@ -642,7 +1105,7 @@ def analyze_documents(
         "not_in_metadata_count": not_in_metadata,
         "visual_changed_count": visual_changed,
         "reindex_count": len(reindexed),
-        "unchanged_count": found - len(reindexed),
+        "unchanged_count": found + copied - len(reindexed),
         "new_local_count": new_local,
     }
 
@@ -691,6 +1154,12 @@ def _issue(level: str, code: str, message: str) -> dict[str, str]:
 
 def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
+
+
+def _format_bytes(value: int) -> str:
+    if value >= 1024**3:
+        return f"{value / 1024**3:.1f} Go".replace(".", ",")
+    return f"{max(1, round(value / 1024**2))} Mo"
 
 
 def finalize_report(report: dict[str, Any]) -> dict[str, Any]:
@@ -775,7 +1244,17 @@ def finalize_report(report: dict[str, Any]) -> dict[str, Any]:
         ))
 
     library = report["library"]
-    if library["exported_source"] != library["current_source"]:
+    records = report.get("records") or {}
+    if records.get("use"):
+        issues.append(_issue(
+            "info",
+            "records_used",
+            f"Ce PC n'a pas de source de métadonnées : les {_plural(records['count'], 'notice', 'notices')} "
+            "de l'archive (titres, auteurs, tags, notes) seront utilisées, sans réindexation. "
+            "Vous pourrez connecter Zotero plus tard dans Mes documents ; les documents dont la "
+            "notice diffère seront alors réindexés.",
+        ))
+    elif library["exported_source"] != library["current_source"]:
         issues.append(_issue(
             "warning",
             "metadata_source",
@@ -796,7 +1275,10 @@ def finalize_report(report: dict[str, Any]) -> dict[str, Any]:
             f"La bibliothèque Zotero de ce PC n'est pas celle de l'export{detail}. "
             "Les notices qui diffèrent entraîneront une réindexation des documents concernés.",
         ))
-    if library["exported_storage_layout"] and not library["current_storage_layout"]:
+    copy = report.get("documents_copy") or {}
+    # Copied documents keep the archive's paths, which match the index.
+    copying = copy.get("mode") in _COPY_MODES
+    if library["exported_storage_layout"] and not library["current_storage_layout"] and not copying:
         issues.append(_issue(
             "warning",
             "storage_layout",
@@ -804,8 +1286,34 @@ def finalize_report(report: dict[str, Any]) -> dict[str, Any]:
             "Choisissez aussi ce dossier sur ce PC, sinon les chemins ne correspondront pas.",
         ))
 
+    if copy.get("copy_count"):
+        where = copy["target"]
+        issues.append(_issue(
+            "info",
+            "documents_copied",
+            f"{_plural(copy['copy_count'], 'document de l’archive sera copié', 'documents de l’archive seront copiés')} "
+            f"dans {where} ({_format_bytes(copy['copy_bytes'])}). Aucun fichier existant n'est remplacé."
+            + (" Ce dossier deviendra le dossier de vos PDF." if copy.get("set_data_path") else ""),
+        ))
+        if not copy.get("disk_ok", True):
+            issues.append(_issue(
+                "error",
+                "documents_disk_space",
+                f"Espace disque insuffisant dans {where} pour copier les documents "
+                f"({_format_bytes(copy['copy_bytes'])} nécessaires).",
+            ))
+    if copy.get("mode") == "zotero_other_library":
+        issues.append(_issue(
+            "warning",
+            "documents_not_copied",
+            f"L'archive contient {_plural(copy['included_count'], 'document', 'documents')}, "
+            "mais ils ne sont pas copiés : le dossier storage de Zotero de ce PC appartient à une "
+            "autre bibliothèque, et Zotero ne connaîtrait pas ces fichiers. Copiez-les vous-même "
+            "ou choisissez un autre dossier de PDF, puis relancez la vérification.",
+        ))
+
     documents = report["documents"]
-    if not documents["data_path_exists"]:
+    if not documents["data_path_exists"] and copy.get("mode") != "new_folder":
         issues.append(_issue(
             "warning",
             "data_path_missing",
@@ -874,6 +1382,11 @@ def inspect_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
     index_info = archive["index"]
     embedding = embedding_compatibility(index_info)
     library_report, library = compare_library(archive["library"])
+    records = plan_records(archive["records"], library_report)
+    if records["use"]:
+        library = _records_library(archive["records"])
+    copy = plan_document_copy(archive["files"], library_report)
+    incoming = {rel_path: archive["files"][rel_path] for rel_path in copy["rel_paths"]}
     required = int(archive["uncompressed_bytes"] * 1.1)
     free = _free_bytes()
     report = {
@@ -900,7 +1413,15 @@ def inspect_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
             "same": index_info["chunk_size"] == get_persisted_chunk_size(),
         },
         "library": library_report,
-        "documents": analyze_documents(archive["entries"], archive["documents"], library),
+        "documents": analyze_documents(
+            archive["entries"],
+            archive["documents"],
+            library,
+            data_path=copy["target"] or None,
+            incoming=incoming,
+        ),
+        "documents_copy": _public_copy_plan(copy),
+        "records": records,
         "existing_index": _existing_profile(
             index_info,
             embedding["current_model"]
@@ -945,16 +1466,22 @@ def _extract_index(archive_path: str, staging: Path) -> None:
     staging.mkdir(parents=True)
     try:
         with zipfile.ZipFile(archive_path) as archive:
-            for info in archive.infolist():
-                if info.is_dir() or not info.filename.startswith(_INDEX_PREFIX):
-                    continue
+            members = [
+                info
+                for info in archive.infolist()
+                if not info.is_dir() and info.filename.startswith(_INDEX_PREFIX)
+            ]
+            counter = _ByteCounter("install", sum(info.file_size for info in members))
+            for info in members:
                 relative = info.filename[len(_INDEX_PREFIX):]
                 destination = staging.joinpath(*PurePosixPath(relative).parts)
                 if not _is_within(destination, staging):
                     raise IndexTransferError("corrupted_archive", "Chemin refusé dans l'archive.")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(info) as source, destination.open("wb") as target:
-                    shutil.copyfileobj(source, target, 1024 * 1024)
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        target.write(chunk)
+                        counter.add(len(chunk))
     except (zipfile.BadZipFile, EOFError) as exc:
         raise IndexTransferError(
             "corrupted_archive", "L'archive est endommagée (copie incomplète ?)."
@@ -973,6 +1500,75 @@ def _extract_index(archive_path: str, staging: Path) -> None:
         raise IndexTransferError("corrupted_archive", "La base Chroma de l'archive est illisible.")
 
 
+def _copy_documents(
+    archive_path: str, files: dict[str, dict[str, Any]], plan: dict[str, Any]
+) -> dict[str, Any]:
+    """Copy the planned documents into ``plan["target"]``, never over an existing file.
+
+    Each file is written under a temporary name and only takes its real name
+    once its size and SHA-256 match the header.
+    """
+    target = Path(plan["target"])
+    target.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    skipped = 0
+    counter = _ByteCounter("copy", int(plan["copy_bytes"]))
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            for rel_path in plan["rel_paths"]:
+                item = files[rel_path]
+                destination = target.joinpath(*PurePosixPath(item["path"]).parts)
+                if not _is_within(destination, target):
+                    raise IndexTransferError("corrupted_archive", "Chemin refusé dans l'archive.")
+                if destination.exists() or _locate_document(rel_path, str(target)):
+                    skipped += 1
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                part = destination.with_name(destination.name + _PART_SUFFIX)
+                part.unlink(missing_ok=True)
+                digest = hashlib.sha256()
+                size = 0
+                try:
+                    with archive.open(item["member"]) as source, part.open("xb") as handle:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            size += len(chunk)
+                            handle.write(chunk)
+                            counter.add(len(chunk), destination.name)
+                    if size != int(item["bytes"]) or digest.hexdigest() != item["sha256"]:
+                        raise IndexTransferError(
+                            "corrupted_archive",
+                            f"Le document {item['path']} est endommagé dans l'archive.",
+                        )
+                    if destination.exists():
+                        # Appeared during the copy: the file already here wins.
+                        part.unlink()
+                        skipped += 1
+                        continue
+                    os.rename(part, destination)
+                except BaseException:
+                    part.unlink(missing_ok=True)
+                    raise
+                copied += 1
+    except (zipfile.BadZipFile, EOFError) as exc:
+        raise IndexTransferError(
+            "corrupted_archive", "L'archive est endommagée (copie incomplète ?)."
+        ) from exc
+    return {"copied": copied, "skipped": skipped}
+
+
+def _adopt_data_path(path: str) -> None:
+    """Make ``path`` the PDF folder, as choosing it in the settings does."""
+    from src.app_settings import set_app_settings
+
+    Path(path).mkdir(parents=True, exist_ok=True)
+    config.set_data_path(path)
+    try:
+        set_app_settings(data_path=path)
+    except Exception:
+        _logger.warning("Unable to save the imported PDF folder", exc_info=True)
+
+
 def _prune_backups(profiles_root: Path, profile_id: str, keep: Path | None) -> None:
     prefix = f".backup-{profile_id}-"
     for entry in profiles_root.iterdir():
@@ -984,16 +1580,57 @@ def import_archive(
     archive_path: str | os.PathLike[str],
     *,
     adopt_settings: bool = True,
+    copy_documents: bool = True,
 ) -> dict[str, Any]:
     """Install the archive's index; the previous one with the same profile is kept aside.
 
     With ``adopt_settings`` the chunk size and, when the model is installed,
     the embedding model are aligned on the index so the next load uses it.
+    With ``copy_documents`` the archive's documents missing here are copied
+    first, following ``plan_document_copy``. The archive's records become the
+    metadata source when this computer has none (``plan_records``).
     """
+    _progress_begin("import")
+    try:
+        return _import_archive(
+            archive_path, adopt_settings=adopt_settings, copy_documents=copy_documents
+        )
+    finally:
+        _progress_end()
+
+
+def _import_archive(
+    archive_path: str | os.PathLike[str],
+    *,
+    adopt_settings: bool,
+    copy_documents: bool,
+) -> dict[str, Any]:
     archive = _read_archive(archive_path)
     free = _free_bytes()
     if 0 <= free < archive["uncompressed_bytes"]:
         raise IndexTransferError("disk_space", "Espace disque insuffisant pour importer cet index.")
+    documents: dict[str, Any] = {"copied": 0, "skipped": 0, "target": "", "data_path_set": False}
+    records_result: dict[str, Any] = {"used": False, "path": "", "count": 0}
+    library_report: dict[str, Any] | None = None
+    use_records = False
+    if archive["records"]:
+        library_report, _library = compare_library(archive["library"])
+        use_records = plan_records(archive["records"], library_report)["use"]
+    if copy_documents and archive["files"]:
+        if library_report is None:
+            library_report, _library = compare_library(archive["library"])
+        plan = plan_document_copy(archive["files"], library_report)
+        if plan["mode"] in _COPY_MODES:
+            documents["target"] = plan["target"]
+            if plan["copy_count"]:
+                if not plan["disk_ok"]:
+                    raise IndexTransferError(
+                        "disk_space", "Espace disque insuffisant pour copier les documents."
+                    )
+                documents.update(_copy_documents(archive["path"], archive["files"], plan))
+            if plan["set_data_path"]:
+                _adopt_data_path(plan["target"])
+                documents["data_path_set"] = True
     index_info = archive["index"]
     compatibility = embedding_compatibility(index_info)
     label = str(index_info["embedding_model"])
@@ -1039,6 +1676,13 @@ def import_archive(
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
     _prune_backups(profiles_root, target.name, backup)
+    if use_records:
+        # Only once the index is in place: a failed import leaves the metadata source alone.
+        records_result.update(
+            used=True,
+            path=_adopt_records(archive["records"], Path(archive["path"]).name),
+            count=len(archive["records"]),
+        )
 
     adopted = {"chunk_size": False, "embedding_model": False}
     if adopt_settings:
@@ -1064,5 +1708,7 @@ def import_archive(
         "adopted": adopted,
         "backup": str(backup) if backup else "",
         "document_count": len(archive["entries"]),
+        "documents": documents,
+        "records": records_result,
         "embedding": compatibility,
     }

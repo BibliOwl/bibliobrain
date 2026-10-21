@@ -18,6 +18,52 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
 
 ## [Non publié]
 
+## [0.8.1-beta.1] - 2026-10-21
+
+### Ajouté
+
+- Changer d'ordinateur : l'export et l'import de l'index sont dans Réglages > Documents
+  (« Changer d'ordinateur »). Le fichier d'export contient aussi les PDF indexés (case à
+  décocher pour les laisser de côté, avec leur taille affichée et un avertissement FAT32 au-delà
+  de 4 Go) et la fiche de chaque document (titre, auteurs, étiquettes, collections, notes,
+  annotations). À l'import, un plan court n'affiche que ce qui demande une décision ; un
+  seul bouton télécharge le modèle d'embedding manquant et installe l'index. Les PDF
+  absents sont copiés sans jamais écraser un fichier existant (dans « Documents/Bibliobrain
+  PDF » si aucun dossier n'est choisi). Si l'ordinateur n'a pas de Zotero ni de BibTeX, les
+  fiches importées servent de source et rien n'est ré-indexé. Une barre de progression suit
+  le téléchargement du modèle, l'export, la copie et l'installation. L'assistant du premier
+  lancement propose « importez son index » à la fin de l'étape 1.
+
+### Corrigé
+
+- Aperçu du rechargement impossible (erreur 500) : un seul .pptx illisible ou contenant un
+  gros objet intégré (tableur collé, vidéo) faisait échouer l'aperçu, les métadonnées et la
+  détection des doublons. Seules les parties lues par les analyseurs comptent maintenant dans
+  la limite de taille ; objets intégrés, polices, images et miniatures sont ignorés. Un
+  document illisible ou trop gros ne bloque plus l'analyse de la bibliothèque.
+- Zotero avec ZotMoov et sous-dossiers : charger Zotero ne remplace plus le dossier de PDF
+  choisi ; la détection lit `prefs.js` (dossier de données personnalisé, dossier des fichiers
+  liés proposé quand la plupart des PDF le sont) ; les documents sont rattachés à leur fiche
+  par chemin d'abord, par nom de fichier seulement s'il est unique ; deux « article.pdf » de
+  dossiers différents ne fusionnent plus (ils sont relus une fois). Réglages : « Revenir
+  au Zotero par défaut » et un décompte des documents trouvés, sous-dossiers compris.
+- Chat : « Trouve les articles écrits par <prénom> » retrouve aussi les entrées à initiales
+  seules (« Moreau, C. ») quand la bibliothèque montre le même nom avec le prénom complet.
+  « Seulement 3 ? » ou « only three? » prolongent la liste précédente au lieu de relancer une
+  recherche, et une liste tirée des métadonnées ne prétend plus venir de l'index.
+- Chat : « Quels sont les thèmes principaux de ma bibliothèque ? » et les questions de vue
+  d'ensemble sans sujet précis s'appuient sur les Cartographies : les 8 plus grands groupes
+  de la bibliothèque, chacun avec un passage de texte d'un article représentatif. Avant, la
+  recherche ramenait des tables des matières et des index, et les petits modèles répondaient
+  que les thèmes étaient introuvables ou listaient des titres au hasard. Les modèles
+  `qwen3.5` reçoivent maintenant la consigne de regrouper en 2 à 4 thèmes ; « test » ou
+  « merci » ne relancent plus la vue d'ensemble précédente.
+
+### Sécurité
+
+- Pillow passe en 13.0.0 (huit failles corrigées) et certifi en 2026.10.19. Pillow lit les
+  images extraites des PDF.
+
 ## [0.8.0] - 2026-10-20
 
 Première version publique.
@@ -304,5 +350,6 @@ Première version publique.
   bande horizontale de 100 px : c'est de nouveau une liste verticale. Historique replié vers
   1100 px : ses deux boutons ne débordent plus de la barre.
 
-[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.0...HEAD
+[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bibliOwl/bibliobrain/releases/tag/v0.8.0

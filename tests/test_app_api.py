@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import urllib.error
+import zipfile
 from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
@@ -90,7 +91,12 @@ def _load_app_api_module(
     )
     features = [_reload_module(f"src.api.{name}") for name in feature_names]
     entry = _reload_module("app_api")
-    return _ApiTestModules([entry, application, common, streams, *features])
+    api = _ApiTestModules([entry, application, common, streams, *features])
+    # Switching the embedding model re-embeds probe passages with the new
+    # service: over the network here, up to a minute of timeouts. The check
+    # itself is covered in tests/test_embedding_equivalence.py.
+    api.adopt_equivalent_vector_index = lambda **_kwargs: None
+    return api
 
 
 def _load_llm_provider_module(storage_dir: Path) -> Any:
@@ -1300,7 +1306,7 @@ def test_app_api_zotero_load_returns_rows_when_settings_save_fails(
         lambda indexed_only=True: ([["Paper", "Author", "2024"]], ["papers/demo.pdf"]),
     )
     monkeypatch.setattr(app_api, "get_zotero_facets", lambda: {"stats": {"items": 1}})
-    monkeypatch.setattr(app_api, "find_zotero_storage", lambda _path: "")
+    monkeypatch.setattr(app_api, "suggest_zotero_pdf_folder", lambda _path: "")
 
     client = TestClient(app_api.app)
     response = client.post("/api/zotero-load", json={"path": "C:/Zotero/zotero.sqlite"})
@@ -1422,6 +1428,9 @@ def test_app_api_set_data_path_counts_documents_on_disk(
     assert payload["ok"] is True
     assert payload["paths"] == []
     assert payload["document_count"] == 2
+    assert payload["indexed_count"] == 0
+    # Before the first preparation "0 indexed" read as "nothing found".
+    assert "2 documents trouves, sous-dossiers compris ; 0 deja prepares" in payload["msg"]
 
 
 def test_app_api_select_data_directory_returns_selected_path_without_saving(
@@ -2325,6 +2334,56 @@ def test_rag_reload_preview_endpoint_reports_diagnostic(
     assert captured["chunk_size"] == 1200
     assert payload["mode"] == "incremental"
     assert payload["new_count"] == 1
+
+
+def _write_deck(path: Path, extra_member: str = "", extra_size: int = 0) -> None:
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "ppt/slides/slide1.xml",
+            '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><a:p><a:r><a:t>Bobine</a:t></a:r></a:p></p:sld>',
+        )
+        if extra_member:
+            archive.writestr(extra_member, bytes(extra_size))
+
+
+def test_rag_reload_preview_survives_unreadable_slide_decks(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    """Two testers' 0.8.0 reports: "Preview RAG impossible (500)".
+
+    One bad .pptx in the library made the reload preview fail. The endpoint
+    runs the real file scan here; only the online metadata lookup is stubbed.
+    """
+    storage_dir = workspace_tmp_dir / "storage"
+    data_dir = workspace_tmp_dir / "data"
+    app_api = _load_app_api_module(storage_dir, data_dir)
+    import src.pdf_metadata as pdf_metadata
+
+    monkeypatch.setattr(pdf_metadata, "enrich_pdf_metadata", lambda item, **_kwargs: item)
+    monkeypatch.setenv("BIBLIOBRAIN_MAX_DOCUMENT_MB", "1")
+
+    mib = 1024 * 1024
+    decks = data_dir / "Présentations"
+    decks.mkdir()
+    (data_dir / "notes.md").write_text("# Notes\n\nTexte lisible.", encoding="utf-8")
+    # From the logs: an embedded video, an embedded spreadsheet object.
+    _write_deck(decks / "video.pptx", "ppt/media/media4.mp4", 30 * mib)
+    _write_deck(decks / "objet.pptx", "ppt/embeddings/oleObject26.bin", 30 * mib)
+    # Still refused when read, but must not break the scan either.
+    _write_deck(decks / "texte-enorme.pptx", "ppt/slides/slide2.xml", 30 * mib)
+    with zipfile.ZipFile(decks / "trop-gros.pptx", "w") as archive:
+        archive.writestr("ppt/media/clip.mp4", bytes(2 * mib))  # over the 1 MB guard
+    (decks / "corrompu.pptx").write_bytes(b"PK\x03\x04" + b"\x00" * 64)
+
+    client = TestClient(app_api.app)
+    response = client.get("/api/rag/reload-preview")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "initial_index"
+    # Every document is listed: unreadable ones are skipped when indexing.
+    assert payload["new_count"] == 6
 
 
 def test_validate_local_embedding_model_lmstudio_reports_unloaded_embeddings(
@@ -3246,6 +3305,48 @@ def test_chat_followup_after_paper_list_lists_more_papers(
     assert calls[1]["target_chunks"] == paper_list.FOLLOWUP_PAPER_LIST_CHUNKS
     assert calls[2]["exclude_sources"] == []
 
+
+
+def test_chat_count_doubt_after_suggested_author_list_stays_in_paper_list(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    """2026-10-21 report: "seulement 3 ?" reached plain RAG, which denied a listed paper."""
+    app_api = _load_app_api_module(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+    calls: list[dict[str, Any]] = []
+
+    import src.rag.paper_list as paper_list
+
+    def fake_stream_paper_list(user_query: str, model_name: str, threshold: float, **kwargs: Any):
+        calls.append({"query": user_query, **kwargs})
+        yield {"type": "token", "text": "list"}
+        yield {
+            "type": "sources",
+            "data": [{"article_id": "a1", "title": "Paper 1"}],
+            "answer_origin": "paper_list",
+        }
+
+    def unexpected_rag(*args: Any, **kwargs: Any):
+        raise AssertionError("a doubt about the list count must not reach plain RAG")
+
+    monkeypatch.setattr(paper_list, "stream_paper_list", fake_stream_paper_list)
+    monkeypatch.setattr(app_api, "stream_chat_api", unexpected_rag)
+
+    client = TestClient(app_api.app)
+    chat_id = ""
+    for message, hint in (("Find papers written by claire", "local_search"), ("seulement 3 ?", None)):
+        payload: dict[str, Any] = {"message": message, "model": "demo-model", "threshold": 0.2}
+        if hint:
+            payload["hint_action"] = hint
+        if chat_id:
+            payload["chat_id"] = chat_id
+        with client.stream("POST", "/api/chat", json=payload) as response:
+            assert response.status_code == 200
+            "".join(response.iter_text())
+        chat_id = chat_id or app_api.list_conversations()[0]["id"]
+
+    assert len(calls) == 2
+    assert calls[1]["query"] == calls[0]["query"]
+    assert calls[1]["exclude_sources"] == [{"article_id": "a1", "title": "Paper 1"}]
 
 @pytest.mark.parametrize("depth", ["auto", "quick", "deep"])
 def test_chat_ordinary_question_reaches_retrieval_without_llm_planner(

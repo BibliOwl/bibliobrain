@@ -454,12 +454,6 @@ def test_local_embeddings_are_presented_as_the_stable_default() -> None:
     ).read_text(encoding="utf-8")
 
 
-def test_advanced_wiki_settings_are_removed() -> None:
-    assert 'id="wiki-debug-settings"' not in HTML
-    assert 'id="wiki-use-lightweight"' not in HTML
-    assert "Wiki avancé" not in HTML
-
-
 def test_remote_provider_choice_is_not_greyed_out_preemptively() -> None:
     assert "remoteOption.disabled = false" in SETTINGS_JS
     assert "remoteOption.disabled = !Boolean(d?.can_use_remote)" not in SETTINGS_JS

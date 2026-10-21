@@ -125,6 +125,34 @@ def _read_zip_member(archive: zipfile.ZipFile, name: str) -> bytes:
     return archive.read(info)
 
 
+# Folders of Office, ODF and EPUB packages that only hold binary payloads.
+_BINARY_ARCHIVE_FOLDERS = (
+    "/media/",
+    "/embeddings/",
+    "/activex/",
+    "/fonts/",
+    "/pictures/",
+    "/objectreplacements/",
+    "/thumbnails/",
+    "/images/",
+    "/audio/",
+    "/video/",
+)
+_TEXT_ARCHIVE_SUFFIXES = frozenset({".xml", ".rels", ".html", ".htm", ".xhtml", ".opf", ".ncx"})
+
+
+def _is_binary_member(name: str) -> bool:
+    """Embedded media, objects and fonts: never decompressed by the parsers.
+
+    Only parts the parsers read count towards the archive budget. A part
+    with a text suffix always counts, wherever it sits.
+    """
+    normalized = "/" + str(name or "").replace("\\", "/").lower()
+    if posixpath.splitext(normalized)[1] in _TEXT_ARCHIVE_SUFFIXES:
+        return False
+    return any(folder in normalized for folder in _BINARY_ARCHIVE_FOLDERS)
+
+
 def _validate_archive_budget(archive: zipfile.ZipFile) -> None:
     total = 0
     members = archive.infolist()
@@ -132,6 +160,11 @@ def _validate_archive_budget(archive: zipfile.ZipFile) -> None:
         raise DocumentFormatError("Archive contenant trop de composants")
     for info in members:
         _safe_member_name(info.filename)
+        # A slide deck with a video or an embedded spreadsheet stays readable:
+        # only the parts the parsers decompress count, and _read_zip_member
+        # still caps each of them.
+        if _is_binary_member(info.filename):
+            continue
         if info.file_size > _MAX_ARCHIVE_MEMBER_BYTES:
             raise DocumentFormatError(f"Composant trop volumineux: {info.filename}")
         total += int(info.file_size)
@@ -668,6 +701,18 @@ def _metadata_item(path: Path, values: dict[str, str]) -> ZoteroItem:
 
 
 def extract_document_metadata(path: str | os.PathLike[str]) -> ZoteroItem | None:
+    """Metadata stored in the file itself, or None when it cannot be read.
+
+    Like the PDF reader, an unreadable, oversized or malformed file yields no
+    metadata instead of an error: one bad file must not stop a library scan.
+    """
+    try:
+        return _extract_document_metadata(path)
+    except (DocumentFormatError, OSError, ValueError, zipfile.BadZipFile, EOFError):
+        return None
+
+
+def _extract_document_metadata(path: str | os.PathLike[str]) -> ZoteroItem | None:
     full_path = Path(path)
     suffix = full_path.suffix.lower()
     if suffix in SUPPORTED_DOCUMENT_EXTENSIONS:
@@ -711,7 +756,7 @@ def resolve_document_metadata(
             allow_external_enrichment=allow_external_enrichment,
         )
 
-    primary = lookup_zotero_item(rel_path, library)
+    primary = lookup_zotero_item(rel_path, library, full_path)
     local = extract_document_metadata(full_path)
     lookup_item = merge_missing_metadata(primary, local)
     external = enrich_pdf_metadata(lookup_item, allow_network=allow_external_enrichment)

@@ -811,6 +811,9 @@ def test_stream_paper_list_author_only_uses_metadata_without_initializing_rag(mo
 
     text = "".join(event.get("text", "") for event in events if event.get("type") == "token")
     assert "Paper by Moreau" in text
+    # The lookup is exhaustive: the header must not call it a RAG index search.
+    assert "metadonnees de la bibliotheque listent 1 article indexe" in text
+    assert "index RAG" not in text
     sources = next(event for event in events if event.get("type") == "sources")
     assert sources["data"][0]["authors"] == "Claire Moreau, Alice Example"
     metrics = next(event for event in events if event.get("type") == "pipeline_metrics")

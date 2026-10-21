@@ -384,6 +384,11 @@ def _after_paper_list(query: str, sources: list[dict[str, Any]]) -> list[dict[st
     "tu peux tout citer ?",
     "Any others?",
     "et les autres ?",
+    # 2026-10-21 report: "seulement 3 ?" went to plain RAG, which contradicted the list.
+    "seulement 3 ?",
+    "il n'y en a que 3 ?",
+    "only three?",
+    "just 3 papers?",
 ])
 def test_continuation_after_paper_list_repeats_the_query_without_listed_papers(
     message: str,
@@ -421,3 +426,5 @@ def test_paper_list_followup_needs_a_previous_list_and_no_new_topic() -> None:
     assert paper_list_followup("il y en a d'autres ?", []) is None
     assert paper_list_followup("d'autres articles sur le refroidissement ?", listed) is None
     assert paper_list_followup("tu peux tout résumer ?", listed) is None
+    assert paper_list_followup("seulement ceux de 2024 sur le quench ?", listed) is None
+    assert paper_list_followup("only the review papers?", listed) is None

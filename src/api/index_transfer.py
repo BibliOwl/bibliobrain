@@ -20,7 +20,11 @@ from fastapi import APIRouter, Request
 from src import config
 from src.api import application
 from src.api.common import api_error, is_loopback_request
-from src.api_models import IndexTransferImportRequest, IndexTransferPullRequest
+from src.api_models import (
+    IndexTransferExportRequest,
+    IndexTransferImportRequest,
+    IndexTransferPullRequest,
+)
 from src.atomic_io import atomic_write_json
 from src.native_dialogs import (
     NativeDialogBusy,
@@ -159,24 +163,56 @@ def _unknown_token():
     )
 
 
+def _no_ready_index_error():
+    return api_error(
+        "no_ready_index",
+        status_code=409,
+        message=(
+            "Aucun index complet pour le modèle d'embedding actuel. "
+            "Préparez d'abord vos articles, puis exportez."
+        ),
+    )
+
+
+@router.get("/api/index-transfer/progress")
+def api_index_transfer_progress(request: Request):
+    """Progress of the running download, export or import (polled by the UI)."""
+    from src.rag.index_transfer import transfer_progress
+
+    error = _local_only_error(request)
+    if error is not None:
+        return error
+    return {"ok": True, **transfer_progress()}
+
+
+@router.get("/api/index-transfer/export-estimate")
+def api_index_transfer_export_estimate(request: Request):
+    """Sizes of the export with and without the documents (file sizes only, nothing is read)."""
+    from src.rag.index_transfer import estimate_export
+
+    error = _local_only_error(request)
+    if error is not None:
+        return error
+    if not application.get_vector_database_status().get("profile_ready"):
+        return _no_ready_index_error()
+    try:
+        return {"ok": True, **estimate_export()}
+    except Exception as exc:
+        return _transfer_error(exc)
+
+
 @router.post("/api/index-transfer/export")
-def api_index_transfer_export(request: Request):
-    """Ask where to save, then write the active index there."""
+def api_index_transfer_export(request: Request, req: IndexTransferExportRequest | None = None):
+    """Ask where to save, then write the active index (and the documents) there."""
     from src.rag.index_transfer import default_export_name, export_active_index
 
+    include_documents = True if req is None else req.include_documents
     error = _local_only_error(request)
     if error is not None:
         return error
     status = application.get_vector_database_status()
     if not status.get("profile_ready"):
-        return api_error(
-            "no_ready_index",
-            status_code=409,
-            message=(
-                "Aucun index complet pour le modèle d'embedding actuel. "
-                "Préparez d'abord vos articles, puis exportez."
-            ),
-        )
+        return _no_ready_index_error()
     try:
         path = choose_save_file(
             default_name=default_export_name(),
@@ -193,7 +229,7 @@ def api_index_transfer_export(request: Request):
         return _busy_error()
     try:
         with application._managed_operation():
-            result = export_active_index(path)
+            result = export_active_index(path, include_documents=include_documents)
     except Exception as exc:
         return _transfer_error(exc)
     finally:
@@ -284,4 +320,13 @@ def api_index_transfer_import(req: IndexTransferImportRequest, request: Request)
     finally:
         application._rag_init_lock.release()
     _forget_pending(req.token)
+    records = result.get("records") if isinstance(result, dict) else None
+    if isinstance(records, dict) and records.get("used") and records.get("path"):
+        # The Library tab shows the imported records at once, even before a reload.
+        from src.library import init_zotero
+
+        try:
+            init_zotero(str(records["path"]))
+        except Exception:
+            _logger.warning("Unable to load the imported records in the Library tab", exc_info=True)
     return {"ok": True, **result, "vector_db": application.get_vector_database_status()}

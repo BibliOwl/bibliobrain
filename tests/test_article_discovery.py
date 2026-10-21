@@ -6,9 +6,26 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
 
 import src.config as config
+
+
+@pytest.fixture(autouse=True)
+def _offline_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these tests off the internet: a request no test faked gets a 404 at once.
+
+    Without it, abstract enrichment looked up the tests' made-up DOIs on Semantic
+    Scholar, OpenAlex and Crossref.
+    """
+
+    async def offline_send(
+        self: httpx.AsyncClient, request: httpx.Request, **_kwargs: Any
+    ) -> httpx.Response:
+        return httpx.Response(404, request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", offline_send)
 
 
 def test_pdf_download_rejects_loopback_target() -> None:
@@ -98,7 +115,15 @@ def _load_article_discovery_module(workspace_tmp_dir: Path) -> Any:
     discovery._rerank_discovery_papers = _fake_discovery_rerank
     discovery._dense_rank_discovery_papers = _fake_discovery_dense
     discovery._semantic_recommendations_for_dois = _fake_recommendations
+    # DOI lookups for missing abstracts retry each 404 with a backoff (~3 s per
+    # DOI); the enrichment tests call the real one through this name.
+    discovery._real_enrich_missing_abstracts = discovery._enrich_missing_abstracts
+    discovery._enrich_missing_abstracts = _fake_no_abstract_enrichment
     return discovery
+
+
+async def _fake_no_abstract_enrichment(*args: Any, **kwargs: Any) -> int:
+    return 0
 
 
 async def _fake_empty_search(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
@@ -331,7 +356,7 @@ def test_enrich_missing_abstracts_uses_doi_lookup(workspace_tmp_dir: Path) -> No
     discovery._crossref_work_by_doi = fake_crossref_work_by_doi
 
     enriched = asyncio.run(
-        discovery._enrich_missing_abstracts(
+        discovery._real_enrich_missing_abstracts(
             [paper],
             object(),
             mailto="",
@@ -2099,7 +2124,7 @@ def test_enrich_missing_abstracts_uses_openalex_after_semantic_miss(
     discovery._crossref_work_by_doi = fake_crossref_work_by_doi
 
     enriched = asyncio.run(
-        discovery._enrich_missing_abstracts(
+        discovery._real_enrich_missing_abstracts(
             [paper],
             object(),
             mailto="",

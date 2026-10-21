@@ -40,7 +40,8 @@ from .zotero_integration import (
     _build_item_metadata,
     _build_note_documents,
     _file_signature,
-    _zotero_signature,
+    _index_signature,
+    _path_article_id,
 )
 
 _logger = logging.getLogger(__name__)
@@ -318,7 +319,7 @@ def _load_and_chunk_single_pdf(
         page_count=len(prepared_pages),
     )
     file_sig = _file_signature(full_path)
-    zotero_sig = _zotero_signature(item)
+    zotero_sig = _index_signature(rel_path, item)
     index_variant = document_index_variant(
         full_path,
         pdf_variant=index_visual_signature(),
@@ -365,7 +366,7 @@ def _load_or_prepare_single_pdf(
     item = _resolve_index_metadata(rel_path, full_path)
     article_id = _article_id_from_item(rel_path, item)
     file_sig = _file_signature(full_path)
-    zotero_sig = _zotero_signature(item)
+    zotero_sig = _index_signature(rel_path, item)
     visual_signature = document_index_variant(
         full_path,
         pdf_variant=index_visual_signature(),
@@ -520,8 +521,7 @@ def _sanitize_article_id(value: str) -> str:
 def _article_id_from_item(rel_path: str, item: ZoteroItem | None) -> str:
     if item and item.item_key:
         return _sanitize_article_id(item.item_key)
-    stem = Path(rel_path or "article").stem
-    return _sanitize_article_id(stem)
+    return _sanitize_article_id(_path_article_id(rel_path))
 
 
 def _stable_chunk_uid(

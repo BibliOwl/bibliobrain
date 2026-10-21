@@ -149,6 +149,7 @@ from .zotero_integration import (
     _dedupe_keep_order,
     _filter_active_zotero_pdf_entries,
     _normalize_text,
+    _path_article_id,
     _refresh_zotero_library_cache,
     _safe_relpath,
     _split_pipe,
@@ -3296,7 +3297,7 @@ def _analyze_auto_visual_candidate(
         if not text:
             continue
         page = result.get("page", "?")
-        article_id = str(base_metadata.get("article_id") or Path(rel_path).stem).strip()
+        article_id = str(base_metadata.get("article_id") or _path_article_id(rel_path)).strip()
         uid_seed = f"{rel_path}|{page}|{vision_model}|{visual_description_model}|{text}".encode()
         metadata = dict(base_metadata)
         metadata.update(

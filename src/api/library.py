@@ -55,7 +55,7 @@ from src.native_dialogs import (
     choose_file,
 )
 from src.rag.exclusions import excluded_path_keys, normalize_rel_path, set_rel_paths_excluded
-from src.zotero_db import find_zotero_db, find_zotero_storage
+from src.zotero_db import find_zotero_db, suggest_zotero_pdf_folder
 
 _logger = logging.getLogger(__name__)
 
@@ -284,7 +284,8 @@ async def api_analysis_cached(path: str, analysis_type: str):
 @router.get("/api/zotero-detect")
 def api_zotero_detect():
     path = find_zotero_db() or ""
-    storage = find_zotero_storage(path) if path else None
+    # With ZotMoov or linked files the PDFs are not in storage/.
+    storage = suggest_zotero_pdf_folder(path) if path else None
     if path:
         status = init_zotero(path)
         rows, paths = list_library(indexed_only=True)
@@ -322,15 +323,22 @@ async def api_set_data_path(req: SetDataPathRequest):
     persist_warning = application._persist_app_settings_best_effort(data_path=req.path)
     rows, paths = list_library(indexed_only=True)
     count = len(paths)
+    # Documents on disk, indexed or not: lets the first run catch an empty
+    # or wrong folder before preparation starts.
+    document_count = len(find_documents())
     return {
         "ok": True,
-        "msg": f"Dossier source : {req.path} ({count} PDF indexes visibles){persist_warning}",
+        # "0 indexed" read as "nothing found" before the first preparation.
+        "msg": (
+            f"Dossier source : {req.path} ({document_count} documents trouves, "
+            f"sous-dossiers compris ; {count} deja prepares){persist_warning}"
+        ),
         "rows": rows,
         "paths": paths,
         "facets": get_zotero_facets(),
-        # Documents on disk, indexed or not: lets the first run catch an empty
-        # or wrong folder before preparation starts.
-        "document_count": len(find_documents()),
+        "document_count": document_count,
+        "indexed_count": count,
+        "persist_warning": persist_warning,
     }
 
 

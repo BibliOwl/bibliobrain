@@ -22,6 +22,7 @@ from langchain_core.documents import Document
 from src.atomic_io import atomic_write_json
 from src.config import CHROMA_PATH
 from src.document_formats import document_index_variant, resolve_document_metadata
+from src.document_guard import max_document_bytes
 from src.llm_provider import current_embedding_profile_label, required_embedding_model_name
 from src.rag_settings import get_persisted_chunk_size
 from src.rel_paths import normalize_rel_path
@@ -36,10 +37,10 @@ from .zotero_integration import (
     _dedupe_keep_order,
     _file_signature,
     _filter_active_zotero_pdf_entries,
+    _index_signature,
     _legacy_file_signature,
     _normalize_text,
     _refresh_zotero_library_cache,
-    _zotero_signature,
 )
 
 _INDEX_PROFILES_DIR = "indexes"
@@ -647,6 +648,13 @@ def _save_manifest_entries(
     )
 
 
+def _exceeds_document_limit(full_path: str) -> bool:
+    try:
+        return os.path.getsize(full_path) > max_document_bytes(Path(full_path).suffix)
+    except OSError:
+        return False
+
+
 def _compute_index_entries(pdf_list: list[tuple[str, str]]) -> dict[str, dict[str, str]]:
     entries: dict[str, dict[str, str]] = {}
     for rel_path, full_path in pdf_list:
@@ -658,9 +666,15 @@ def _compute_index_entries(pdf_list: list[tuple[str, str]]) -> dict[str, dict[st
         )
         entries[rel_path] = {
             "abs_path": full_path,
-            "file_sig": _file_signature(full_path),
+            # A file the guard refuses is never indexed: hashing gigabytes of
+            # video on every reload would only slow the scan down.
+            "file_sig": (
+                _legacy_file_signature(full_path)
+                if _exceeds_document_limit(full_path)
+                else _file_signature(full_path)
+            ),
             "legacy_file_sig": _legacy_file_signature(full_path),
-            "zotero_sig": _zotero_signature(item),
+            "zotero_sig": _index_signature(rel_path, item),
             "visual_sig": document_index_variant(
                 full_path,
                 pdf_variant=index_visual_signature(),
