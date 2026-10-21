@@ -18,7 +18,7 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
 
 ## [Non publié]
 
-## [0.8.1-beta.1] - 2026-10-21
+## [0.8.1-beta.2] - 2026-10-21
 
 ### Ajouté
 

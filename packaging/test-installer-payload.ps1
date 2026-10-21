@@ -137,7 +137,8 @@ try {
         throw "Reinstalling the package did not restore the damaged application file."
     }
 
-    $parsedVersion = [version]$Version
+    # A prerelease suffix (0.8.1-beta.1) is not valid for [version]: keep the numeric core.
+    $parsedVersion = [version]($Version -replace '[-+].*$', '')
     $nextBuild = [math]::Max(0, $parsedVersion.Build) + 1
     $nextVersion = [version]::new($parsedVersion.Major, $parsedVersion.Minor, $nextBuild).ToString()
     $nextVersionFile = Join-Path $resolvedEvidenceRoot "VERSION.next"

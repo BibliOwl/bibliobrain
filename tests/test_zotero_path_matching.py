@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,7 @@ def _library(db_path: Path, records: list[tuple[str, str, str, str]]) -> dict[st
 
 
 @pytest.fixture(autouse=True)
-def _no_real_zotero_prefs(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_real_zotero_prefs(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(zotero_db, "read_zotero_prefs", lambda: {})
     yield
     load_zotero_library.cache_clear()
@@ -86,6 +87,7 @@ def test_storage_files_with_the_same_name_keep_their_own_record(workspace_tmp_di
     first = lookup_zotero_item("KEYAAAAA/fulltext.pdf", library)
     second = lookup_zotero_item("KEYBBBBB/fulltext.pdf", library)
 
+    assert first is not None and second is not None
     assert (first.title, second.title) == ("Bobines HTS (2018)", "Cryogénie appliquée")
     # Outside storage/ the shared name says nothing: no guess.
     assert lookup_zotero_item("copies/fulltext.pdf", library) is None
@@ -98,7 +100,8 @@ def test_unique_file_name_still_matches_outside_storage(workspace_tmp_dir: Path)
     )
 
     # A lower-case folder of 8 letters is not a Zotero key.
-    assert lookup_zotero_item("articles/Quench 2020.pdf", library).title == "Quench"
+    match = lookup_zotero_item("articles/Quench 2020.pdf", library)
+    assert match is not None and match.title == "Quench"
     # An upper-case key folder Zotero no longer knows is an orphan.
     assert lookup_zotero_item("GONEKEY9/Quench 2020.pdf", library) is None
 
@@ -115,8 +118,10 @@ def test_linked_files_with_the_same_name_match_by_absolute_path(workspace_tmp_di
         ],
     )
 
-    assert lookup_zotero_item("Aimants/article.pdf", library, str(first)).title == "Aimants"
-    assert lookup_zotero_item("Cryo/article.pdf", library, str(second)).title == "Cryo"
+    first_match = lookup_zotero_item("Aimants/article.pdf", library, str(first))
+    second_match = lookup_zotero_item("Cryo/article.pdf", library, str(second))
+    assert first_match is not None and first_match.title == "Aimants"
+    assert second_match is not None and second_match.title == "Cryo"
     assert lookup_zotero_item("Cryo/article.pdf", library) is None
 
 
@@ -179,5 +184,6 @@ def test_one_record_with_the_same_pdf_twice_keeps_its_file_name(workspace_tmp_di
     load_zotero_library.cache_clear()
     library = load_zotero_library(str(db_path))
 
-    assert lookup_zotero_item("copies/a.pdf", library).item_key == "ITEMAAAA"
+    match = lookup_zotero_item("copies/a.pdf", library)
+    assert match is not None and match.item_key == "ITEMAAAA"
     assert not any(item.shared_filename for item in library.values())

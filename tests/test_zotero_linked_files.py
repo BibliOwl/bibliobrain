@@ -101,7 +101,7 @@ def test_zotmoov_destination_is_suggested_instead_of_storage(workspace_tmp_dir: 
             "storage:ABCD1234/reste.pdf",
         ],
     )
-    prefs = {"extensions.zotmoov.dst_dir": str(articles)}
+    prefs: dict[str, object] = {"extensions.zotmoov.dst_dir": str(articles)}
 
     assert zotero_db.find_zotero_linked_pdf_folder(str(db_path), prefs=prefs) == str(articles)
     # Without ZotMoov's setting the common folder of the linked PDFs is used.
@@ -117,7 +117,7 @@ def test_relative_linked_files_use_zotero_base_directory(workspace_tmp_dir: Path
         zotero_dir / "zotero.sqlite",
         ["attachments:Revue/a.pdf", "attachments:b.pdf"],
     )
-    prefs = {"extensions.zotero.baseAttachmentPath": str(base)}
+    prefs: dict[str, object] = {"extensions.zotero.baseAttachmentPath": str(base)}
 
     assert zotero_db.find_zotero_linked_pdf_folder(str(db_path), prefs=prefs) == str(base)
 
