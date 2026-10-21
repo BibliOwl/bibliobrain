@@ -5,7 +5,7 @@ pytest==9.0.3
 pytest-cov==7.1.0
 coverage==7.16.0
 ruff==0.13.3
-uv==0.11.19
+uv==0.13.4
 
 # Optional LaTeX compiler for validating generated .tex exports in development.
 # `pdflatex` on PyPI is only a wrapper around a system pdflatex binary; `tecto`
