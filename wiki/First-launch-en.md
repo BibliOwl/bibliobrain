@@ -19,6 +19,11 @@ Choose the folder containing your papers. Subfolders are included.
 Supported formats: PDF, DOCX, ODT, EPUB, PPTX and text files (`.txt`, `.md`, `.rst`,
 `.tex`, `.csv`, `.tsv`).
 
+**Bibliobrain already set up on another computer?** Export its index there (Settings >
+My documents > **Move to another computer**), then click **Import its index** at the
+bottom of step 1 here. If the file holds your PDFs, no need to choose a folder: they are
+copied into **Documents\Bibliobrain PDF**. The import replaces step 2.
+
 ## Step 2: prepare your papers
 
 Bibliobrain checks that Ollama and the document search component are ready, then

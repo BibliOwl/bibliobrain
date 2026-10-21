@@ -19,6 +19,11 @@ Choisissez le dossier qui contient vos articles ; les sous-dossiers sont inclus.
 Formats lus : PDF, DOCX, ODT, EPUB, PPTX et fichiers texte (`.txt`, `.md`, `.rst`, `.tex`,
 `.csv`, `.tsv`).
 
+**Bibliobrain est déjà prêt sur un autre ordinateur ?** Exportez-y l'index (Paramètres >
+Mes documents > **Changer d'ordinateur**), puis cliquez ici sur **Importer son index** en
+bas de l'étape 1. Si le fichier contient vos PDF, inutile de choisir un dossier : ils sont
+copiés dans **Documents\Bibliobrain PDF**. L'import remplace l'étape 2.
+
 ## Étape 2 : préparation des articles
 
 Bibliobrain vérifie qu'Ollama et le module de recherche dans vos documents sont prêts, puis

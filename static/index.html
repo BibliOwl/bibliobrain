@@ -1828,6 +1828,7 @@
                 <div class="settings-action-help" id="zotero-path-action-help" data-i18n="settings.zoteroActionHelp">Choisissez la détection automatique, ou saisissez le chemin d’un fichier pour le connecter manuellement.</div>
                 <div class="btn-row settings-source-actions">
                   <button class="btn btn-ghost" type="button" id="zotero-load-btn" data-bb-static-onclick="zotero-load" data-i18n="settings.connectMetadataFile">Connecter ce fichier</button>
+                  <button class="btn btn-ghost" type="button" id="zotero-default-btn" data-bb-static-onclick="zotero-detect" data-i18n="settings.useDefaultZotero" data-i18n-title="settings.useDefaultZoteroTitle" title="Retrouve automatiquement la bibliothèque Zotero de cet ordinateur et son dossier de PDF." hidden>Revenir au Zotero par défaut</button>
                 </div>
               </div>
             </div>
@@ -1924,6 +1925,45 @@
             <ul id="ocr-errors" aria-labelledby="ocr-errors-summary" tabindex="0"></ul>
             <button class="btn" id="ocr-errors-more" type="button" hidden data-i18n="ocr.showMore">Afficher la suite</button>
             <button class="btn" id="ocr-retry" type="button" disabled data-i18n="ocr.retry">Réessayer les échecs</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="settings-section settings-card" id="settings-index-transfer">
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <span class="settings-row-title" data-i18n="indexTransfer.title">Changer d’ordinateur</span>
+            <span class="settings-row-desc" data-i18n="indexTransfer.note">Reprenez vos articles déjà préparés sur un autre PC, sans tout recommencer. Le fichier contient l’index de recherche, vos PDF et leurs notices, pas vos conversations ni vos clés API.</span>
+          </div>
+          <div class="settings-control settings-control-inline">
+            <button class="btn btn-ghost" id="index-export-btn" type="button" data-bb-static-onclick="export-vector-index" data-i18n="indexTransfer.exportBtn">Exporter…</button>
+            <button class="btn btn-ghost" id="index-import-btn" type="button" data-bb-static-onclick="inspect-vector-index" data-i18n="indexTransfer.importBtn">Importer…</button>
+          </div>
+        </div>
+        <div id="index-transfer-status" class="settings-status status-cyan" style="display:none" role="status" aria-live="polite"></div>
+        <div id="index-transfer-progress" class="index-transfer-progress" hidden>
+          <div class="index-transfer-progress-bar" id="index-transfer-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-labelledby="index-transfer-progress-text"><span></span></div>
+          <span class="index-transfer-progress-text" id="index-transfer-progress-text"></span>
+        </div>
+        <div id="index-transfer-report" class="index-transfer-report" hidden></div>
+        <details class="settings-details" id="index-transfer-options">
+          <summary data-i18n="indexTransfer.options">Options</summary>
+          <div class="index-transfer-options">
+            <span class="index-transfer-options-group" data-i18n="indexTransfer.optionsExport">À l’export</span>
+            <label class="settings-checkbox-row" for="index-transfer-include-documents">
+              <input type="checkbox" id="index-transfer-include-documents" checked>
+              <span><span data-i18n="indexTransfer.optionDocuments">Inclure les PDF dans le fichier</span> <span class="index-transfer-estimate" id="index-transfer-estimate" data-i18n-skip></span></span>
+            </label>
+            <span class="index-transfer-options-group" data-i18n="indexTransfer.optionsImport">À l’import</span>
+            <label class="settings-checkbox-row" for="index-transfer-auto-download">
+              <input type="checkbox" id="index-transfer-auto-download" checked>
+              <span data-i18n="indexTransfer.optionDownload">Télécharger le modèle d’embedding s’il manque sur ce PC (Ollama)</span>
+            </label>
+            <label class="settings-checkbox-row" for="index-transfer-adopt">
+              <input type="checkbox" id="index-transfer-adopt" checked>
+              <span data-i18n="indexTransfer.adopt">Aligner les réglages sur l’index (modèle d’embedding et taille des blocs)</span>
+            </label>
+            <p class="index-transfer-options-note" data-i18n="indexTransfer.adoptHelp">Sans alignement, vos réglages restent tels quels et l’index importé reste inactif tant qu’ils diffèrent.</p>
           </div>
         </details>
       </div>
@@ -2660,30 +2700,6 @@
         </div>
       </div>
 
-      <div class="settings-section" id="settings-index-transfer">
-        <div class="settings-section-label" data-i18n="indexTransfer.title">Transférer l’index vers un autre PC</div>
-        <div class="settings-section-note" data-i18n="indexTransfer.note">Évite de tout réindexer sur un second ordinateur. Le fichier contient l’index de recherche, pas vos PDF, vos conversations ni vos clés API.</div>
-        <div class="settings-row">
-          <div class="settings-row-info">
-            <span class="settings-row-title" data-i18n="indexTransfer.export">Exporter l’index</span>
-            <span class="settings-row-desc" data-i18n="indexTransfer.exportDesc">Crée un fichier .zip avec l’index du modèle d’embedding actuel.</span>
-          </div>
-          <div class="settings-control">
-            <button class="btn btn-cyan" id="index-export-btn" type="button" style="width:100%" data-bb-static-onclick="export-vector-index" data-i18n="indexTransfer.exportBtn">Exporter…</button>
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row-info">
-            <span class="settings-row-title" data-i18n="indexTransfer.import">Importer un index</span>
-            <span class="settings-row-desc" data-i18n="indexTransfer.importDesc">Le fichier est d’abord vérifié : PDF manquants, bibliothèque Zotero, modèle d’embedding. Rien n’est remplacé avant votre confirmation.</span>
-          </div>
-          <div class="settings-control">
-            <button class="btn btn-cyan" id="index-import-btn" type="button" style="width:100%" data-bb-static-onclick="inspect-vector-index" data-i18n="indexTransfer.importBtn">Choisir un fichier…</button>
-          </div>
-        </div>
-        <div id="index-transfer-status" class="settings-status status-cyan" style="display:none" role="status" aria-live="polite"></div>
-        <div id="index-transfer-report" class="index-transfer-report" hidden></div>
-      </div>
     </div>
 
     <div class="settings-pane" id="settings-pane-expert-cleanup" data-settings-mode="expert">
@@ -3164,6 +3180,11 @@
         <input type="checkbox" id="startup-update-check" checked>
         <span data-i18n="startup.updateCheck">Vérifier chaque jour s’il existe une mise à jour (une requête vers GitHub, rien sur vos documents)</span>
       </label>
+      <p class="startup-import-hint">
+        <span data-i18n="startup.importHint">Bibliobrain est déjà prêt sur un autre ordinateur ?</span>
+        <button type="button" class="startup-link-btn" id="startup-import-index-btn" data-bb-static-onclick="start-startup-index-import" data-i18n="startup.importLink">Importer son index</button>
+        <span class="startup-import-note" data-i18n="startup.importNote">Si le fichier contient vos PDF, inutile de choisir un dossier : ils sont copiés dans Documents.</span>
+      </p>
     </section>
 
     <section id="startup-panel-build" class="startup-step-panel" data-startup-step="build" aria-labelledby="startup-build-heading" hidden>

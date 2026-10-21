@@ -517,3 +517,395 @@ def test_api_never_downloads_a_model_without_confirmation(
     accepted = client.post("/api/index-transfer/pull-model", json={"token": token, "confirm": True})
     assert accepted.status_code == 200
     assert pulled == [MODEL]
+
+
+# ------ Documents in the archive (format 2) ---------------------
+
+
+def _export_with_documents(env: SimpleNamespace) -> Path:
+    lexical = _build_index(env)
+    try:
+        archive = env.root / "transfer" / "index-with-pdfs.zip"
+        result = index_transfer.export_active_index(archive, include_documents=True)
+    finally:
+        lexical.close()
+    assert result["documents_included"] == 4
+    return archive
+
+
+def test_export_with_documents_stores_them_uncompressed_with_their_hash(
+    env: SimpleNamespace,
+) -> None:
+    archive = _export_with_documents(env)
+
+    with zipfile.ZipFile(archive) as bundle:
+        header = json.loads(bundle.read(index_transfer.HEADER_NAME))
+        info = bundle.getinfo("documents/a.pdf")
+        stored = bundle.read("documents/a.pdf")
+
+    original = (env.root / "pc1" / "pdfs" / "a.pdf").read_bytes()
+    assert header["format_version"] == 2
+    assert stored == original
+    assert info.compress_type == zipfile.ZIP_STORED
+    assert set(header["files"]) == {"a.pdf", "b.pdf", "c.pdf", "e.pdf"}
+    assert header["files"]["a.pdf"]["bytes"] == len(original)
+    assert _file_signature(str(env.root / "pc1" / "pdfs" / "a.pdf")).endswith(
+        header["files"]["a.pdf"]["sha256"]
+    )
+    assert str(env.root) not in json.dumps(header)
+
+
+def test_export_without_documents_stays_readable_by_older_versions(env: SimpleNamespace) -> None:
+    lexical = _build_index(env)
+    env.library.clear()  # no records either
+    try:
+        archive = env.root / "transfer" / "index.zip"
+        index_transfer.export_active_index(archive)
+    finally:
+        lexical.close()
+    with zipfile.ZipFile(archive) as bundle:
+        header = json.loads(bundle.read(index_transfer.HEADER_NAME))
+        names = bundle.namelist()
+    assert header["format_version"] == 1
+    assert "files" not in header
+    assert not any(name.startswith("documents/") for name in names)
+
+
+def test_export_estimate_counts_documents_found_here(env: SimpleNamespace) -> None:
+    lexical = _build_index(env)
+    lexical.close()
+    (env.root / "pc1" / "pdfs" / "e.pdf").unlink()
+
+    estimate = index_transfer.estimate_export()
+
+    assert estimate["document_count"] == 4
+    assert estimate["documents_found"] == 3
+    expected = sum((env.root / "pc1" / "pdfs" / name).stat().st_size for name in ("a.pdf", "b.pdf", "c.pdf"))
+    assert estimate["documents_bytes"] == expected
+    assert estimate["index_bytes"] > 0
+
+
+def test_inspect_counts_archived_documents_as_present(env: SimpleNamespace) -> None:
+    archive = _export_with_documents(env)
+    _move_to_second_computer(env)
+
+    report = index_transfer.inspect_archive(archive)
+
+    copy = report["documents_copy"]
+    assert copy["mode"] == "data_path"
+    assert copy["copy_count"] == 1, "only c.pdf is missing here"
+    assert "rel_paths" not in copy
+    documents = report["documents"]
+    assert documents["missing_count"] == 0
+    assert documents["copied_count"] == 1
+    assert [row["rel_path"] for row in documents["content_changed"]] == ["b.pdf"]
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "documents_copied" in codes
+    assert "documents_missing" not in codes
+
+
+def test_import_copies_missing_documents_and_never_overwrites(env: SimpleNamespace) -> None:
+    archive = _export_with_documents(env)
+    _move_to_second_computer(env)
+    here = Path(config.DATA_PATH)
+    edited = (here / "b.pdf").read_bytes()
+
+    result = index_transfer.import_archive(archive)
+
+    assert result["documents"]["copied"] == 1
+    assert result["documents"]["data_path_set"] is False
+    assert (here / "c.pdf").read_bytes() == (env.root / "pc1" / "pdfs" / "c.pdf").read_bytes()
+    assert (here / "b.pdf").read_bytes() == edited, "the local version wins"
+    assert not list(here.rglob("*" + index_transfer._PART_SUFFIX))
+    # The copied file is the indexed one: the next reload does not re-embed it.
+    manifest = json.loads((_profile_dir() / state._MANIFEST_FILE).read_text("utf-8"))
+    assert _file_signature(str(here / "c.pdf")) == manifest["entries"]["c.pdf"]["file_sig"]
+
+
+def test_import_on_a_computer_without_pdf_folder_creates_one(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    archive = _export_with_documents(env)
+    env.use_computer("pc2")
+    folder = env.root / "pc2" / "Documents" / index_transfer.DEFAULT_IMPORT_FOLDER_NAME
+    saved: list[str] = []
+    monkeypatch.setattr(index_transfer, "_data_path_configured", lambda: False)
+    monkeypatch.setattr(index_transfer, "default_import_folder", lambda: str(folder))
+    monkeypatch.setattr("src.app_settings.set_app_settings", lambda **kwargs: saved.append(kwargs["data_path"]))
+
+    report = index_transfer.inspect_archive(archive)
+    assert report["documents_copy"]["mode"] == "new_folder"
+    assert report["documents_copy"]["set_data_path"] is True
+    assert report["documents"]["missing_count"] == 0
+    assert "data_path_missing" not in {issue["code"] for issue in report["issues"]}
+
+    result = index_transfer.import_archive(archive)
+
+    assert result["documents"] == {
+        "copied": 4, "skipped": 0, "target": str(folder), "data_path_set": True,
+    }
+    assert sorted(path.name for path in folder.iterdir()) == ["a.pdf", "b.pdf", "c.pdf", "e.pdf"]
+    assert config.DATA_PATH == str(folder)
+    assert saved == [str(folder)]
+
+
+def test_documents_are_not_copied_into_another_zotero_library(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    archive = _export_with_documents(env)
+    _move_to_second_computer(env)  # another Zotero account
+    monkeypatch.setattr(index_transfer, "is_zotero_storage_path", lambda data_path, db_path: True)
+
+    report = index_transfer.inspect_archive(archive)
+    assert report["documents_copy"]["mode"] == "zotero_other_library"
+    assert report["documents_copy"]["copy_count"] == 0
+    assert "documents_not_copied" in {issue["code"] for issue in report["issues"]}
+
+    result = index_transfer.import_archive(archive)
+    assert result["documents"]["copied"] == 0
+    assert not (Path(config.DATA_PATH) / "c.pdf").exists()
+
+
+def test_same_zotero_library_receives_the_missing_documents(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    archive = _export_with_documents(env)
+    _move_to_second_computer(env)
+    env.settings["account"] = "account-1"
+    monkeypatch.setattr(index_transfer, "is_zotero_storage_path", lambda data_path, db_path: True)
+
+    assert index_transfer.inspect_archive(archive)["documents_copy"]["mode"] == "zotero_storage"
+    assert index_transfer.import_archive(archive)["documents"]["copied"] == 1
+    assert (Path(config.DATA_PATH) / "c.pdf").is_file()
+
+
+def _rewrite_archive(source: Path, target: Path, change: Any) -> None:
+    with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w") as copy:
+        members = {name: original.read(name) for name in original.namelist()}
+        change(members)
+        for name, content in members.items():
+            copy.writestr(name, content)
+
+
+def test_a_damaged_document_is_refused_and_leaves_nothing_behind(env: SimpleNamespace) -> None:
+    archive = _export_with_documents(env)
+    tampered = env.root / "transfer" / "tampered.zip"
+    _rewrite_archive(archive, tampered, lambda members: members.update({"documents/c.pdf": b"%PDF-1.4\nother bytes"}))
+    _move_to_second_computer(env)
+
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.import_archive(tampered)
+
+    assert error.value.code == "corrupted_archive"
+    here = Path(config.DATA_PATH)
+    assert not (here / "c.pdf").exists()
+    assert not list(here.rglob("*" + index_transfer._PART_SUFFIX))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda members: members.update({"documents/unlisted.pdf": b"%PDF-1.4"}),
+        lambda members: members.update({
+            index_transfer.HEADER_NAME: json.dumps({
+                **json.loads(members[index_transfer.HEADER_NAME]),
+                "files": {"a.pdf": {"path": "../a.pdf", "bytes": 1, "sha256": "0" * 64}},
+            }).encode()
+        }),
+    ],
+)
+def test_unannounced_or_unsafe_documents_are_rejected(env: SimpleNamespace, change: Any) -> None:
+    archive = _export_with_documents(env)
+    tampered = env.root / "transfer" / "tampered.zip"
+    _rewrite_archive(archive, tampered, change)
+
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.inspect_archive(tampered)
+    assert error.value.code == "corrupted_archive"
+
+
+def test_api_export_includes_documents_unless_asked_not_to(
+    monkeypatch: Any, pending_storage: Path
+) -> None:
+    from app_api import app
+    from src.api import application
+    from src.api import index_transfer as api
+
+    calls: list[bool] = []
+
+    def fake_export(path: str, *, include_documents: bool) -> dict[str, Any]:
+        calls.append(include_documents)
+        return {"archive": path, "bytes": 1}
+
+    monkeypatch.setattr(api, "choose_save_file", lambda **_kwargs: "C:/exports/index.zip")
+    monkeypatch.setattr(index_transfer, "export_active_index", fake_export)
+    monkeypatch.setattr(application, "get_vector_database_status", lambda: {"profile_ready": True})
+    client = TestClient(app)
+
+    assert client.post("/api/index-transfer/export").status_code == 200
+    assert client.post("/api/index-transfer/export", json={}).status_code == 200
+    assert client.post("/api/index-transfer/export", json={"include_documents": False}).status_code == 200
+    assert calls == [True, True, False]
+
+
+# ------ Records snapshot (step 4) -------------------------------
+
+
+def _no_metadata_here(monkeypatch: Any) -> None:
+    monkeypatch.setattr(index_transfer, "_metadata_library", lambda: ("none", "", {}))
+
+
+def test_export_carries_the_records_of_indexed_documents(env: SimpleNamespace) -> None:
+    archive = _export(env)
+    with zipfile.ZipFile(archive) as bundle:
+        header = json.loads(bundle.read(index_transfer.HEADER_NAME))
+        records = json.loads(bundle.read("metadata.json"))
+    assert header["format_version"] == 2
+    assert header["metadata"] == {"count": 1}
+    assert records["format"] == "bibliobrain-metadata"
+    assert records["items"]["a.pdf"]["title"] == "Article A"
+    assert records["items"]["a.pdf"]["item_key"] == "AAAA1111"
+
+
+def test_records_replace_a_missing_metadata_source_without_reindexing(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    archive = _export(env)
+    _move_to_second_computer(env)
+    _no_metadata_here(monkeypatch)
+
+    report = index_transfer.inspect_archive(archive)
+
+    assert report["records"] == {"count": 1, "use": True}
+    assert report["documents"]["metadata_changed_count"] == 0, "a.pdf keeps its record"
+    codes = {issue["code"] for issue in report["issues"]}
+    assert "records_used" in codes
+    assert "metadata_source" not in codes
+
+
+def test_import_installs_the_records_as_a_file_source(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    from src.rag.zotero_integration import _zotero_signature
+    from src.zotero_db import is_bibtex_source, is_metadata_snapshot, load_zotero_library
+
+    archive = _export(env)
+    original = _zotero_signature(env.library["a.pdf"])
+    _move_to_second_computer(env)
+    _no_metadata_here(monkeypatch)
+    monkeypatch.setattr(config, "STORAGE_DIR", str(env.root / "pc2" / "storage"))
+    monkeypatch.setattr(config, "ZOTERO_DB_PATH", "")
+    saved: list[dict[str, Any]] = []
+    monkeypatch.setattr("src.app_settings.set_app_settings", lambda **kwargs: saved.append(kwargs))
+
+    result = index_transfer.import_archive(archive)
+
+    path = result["records"]["path"]
+    assert result["records"]["used"] is True
+    assert Path(path).parent == env.root / "pc2" / "storage" / "imported_metadata"
+    assert saved == [{"metadata_source": "bibtex", "zotero_path": path}]
+    assert config.ZOTERO_DB_PATH == path
+    assert is_metadata_snapshot(path) and is_bibtex_source(path)
+    load_zotero_library.cache_clear()
+    library = load_zotero_library(path)
+    assert _zotero_signature(library["a.pdf"]) == original
+
+
+def test_records_never_replace_a_metadata_source_of_this_computer(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    archive = _export(env)
+    _move_to_second_computer(env)  # has its own Zotero library
+    saved: list[dict[str, Any]] = []
+    monkeypatch.setattr("src.app_settings.set_app_settings", lambda **kwargs: saved.append(kwargs))
+
+    assert index_transfer.inspect_archive(archive)["records"]["use"] is False
+    assert index_transfer.import_archive(archive)["records"]["used"] is False
+    assert saved == []
+
+
+def test_unreadable_records_reject_the_archive(env: SimpleNamespace) -> None:
+    archive = _export(env)
+    tampered = env.root / "transfer" / "tampered.zip"
+    _rewrite_archive(archive, tampered, lambda members: members.update({"metadata.json": b'{"format": "other"}'}))
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.inspect_archive(tampered)
+    assert error.value.code == "corrupted_archive"
+
+
+def test_infer_metadata_source_treats_records_as_a_file() -> None:
+    from src.app_settings import _infer_metadata_source
+
+    assert _infer_metadata_source("C:/x/imported_metadata/notices-1.json") == "bibtex"
+
+
+# ------ Progress (step 3) ---------------------------------------
+
+
+def _record_progress(monkeypatch: Any) -> list[tuple[str, int, int]]:
+    updates: list[tuple[str, int, int]] = []
+    original = index_transfer._progress_update
+
+    def spy(phase: str, done: int, total: int, label: str = "") -> None:
+        updates.append((phase, int(done), int(total)))
+        original(phase, done, total, label)
+
+    monkeypatch.setattr(index_transfer, "_progress_update", spy)
+    return updates
+
+
+def test_export_and_import_publish_their_progress(env: SimpleNamespace, monkeypatch: Any) -> None:
+    updates = _record_progress(monkeypatch)
+    archive = _export_with_documents(env)
+    export_updates = [update for update in updates if update[0] == "export"]
+    assert export_updates[-1][1] == export_updates[-1][2] > 0, "export ends at 100 %"
+    assert index_transfer.transfer_progress() == {"active": False}
+
+    _move_to_second_computer(env)
+    updates.clear()
+    index_transfer.import_archive(archive)
+    phases = [phase for phase, _done, _total in updates]
+    assert "copy" in phases and "install" in phases
+    assert phases.index("copy") < phases.index("install")
+    assert index_transfer.transfer_progress() == {"active": False}
+
+
+def test_model_download_reports_bytes_of_all_layers(monkeypatch: Any) -> None:
+    updates = _record_progress(monkeypatch)
+    events = [
+        {"status": "pulling manifest"},
+        {"status": "pulling a", "digest": "sha256:a", "total": 100, "completed": 40},
+        {"status": "pulling b", "digest": "sha256:b", "total": 300, "completed": 0},
+        {"status": "pulling a", "digest": "sha256:a", "total": 100, "completed": 100},
+        {"status": "pulling b", "digest": "sha256:b", "total": 300, "completed": 300},
+        {"status": "success"},
+    ]
+    monkeypatch.setattr("src.llm_provider._embedding_ollama_base_url", lambda: "http://localhost:11434")
+    monkeypatch.setattr(index_transfer, "_pull_events", lambda base, name: iter(events))
+
+    index_transfer.pull_embedding_model(MODEL)
+
+    assert ("download", 40, 100) in updates
+    assert ("download", 100, 400) in updates
+    assert updates[-1] == ("download", 400, 400)
+    assert index_transfer.transfer_progress() == {"active": False}
+
+
+@pytest.mark.parametrize(
+    "events",
+    [[{"status": "pulling manifest"}, {"error": "pull model manifest: file does not exist"}], [{"status": "pulling manifest"}]],
+)
+def test_failed_or_interrupted_downloads_are_errors(monkeypatch: Any, events: list[dict[str, Any]]) -> None:
+    monkeypatch.setattr("src.llm_provider._embedding_ollama_base_url", lambda: "http://localhost:11434")
+    monkeypatch.setattr(index_transfer, "_pull_events", lambda base, name: iter(events))
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.pull_embedding_model(MODEL)
+    assert error.value.code == "model_download_failed"
+    assert index_transfer.transfer_progress() == {"active": False}
+
+
+def test_api_progress_is_local_only(monkeypatch: Any) -> None:
+    from app_api import app
+
+    client = TestClient(app)
+    assert client.get("/api/index-transfer/progress").json() == {"ok": True, "active": False}

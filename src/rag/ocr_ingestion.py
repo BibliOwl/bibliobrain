@@ -408,7 +408,7 @@ def enrich(
         # Short documents first: recover useful articles before long scanned books.
         pending.sort(key=lambda row: len(row[3]))
         for rel_path, full_path, inventory, candidates in pending:
-            item = lookup_zotero_item(rel_path, state._zotero_library)
+            item = lookup_zotero_item(rel_path, state._zotero_library, full_path)
             existing = vectorstore.get(where={"rel_path": rel_path}, limit=1, include=["metadatas"])
             metadata = dict((existing.get("metadatas") or [{}])[0] or {})
             if item or not metadata:

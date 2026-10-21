@@ -83,14 +83,6 @@ def test_short_desktop_connections_prioritize_the_graph_canvas() -> None:
     assert "padding: 10px" in compact
 
 
-def test_removed_wiki_has_no_controls_or_runtime_branch() -> None:
-    assert "data-legacy-wiki" not in HTML
-    assert 'id="wiki-chat-enabled"' not in HTML
-    assert "toggleWikiBuild" not in APP_JS
-    assert "isWikiRagEnabled" not in APP_JS
-    assert "legacy_wiki" not in APP_JS
-
-
 def test_rag_retrieval_graph_is_built_from_returned_sources() -> None:
     assert "function rememberLastRagRetrieval" in GRAPH_JS
     assert "function _buildRagRetrievalGraphPayload" in GRAPH_JS

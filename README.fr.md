@@ -141,9 +141,7 @@ Pour signaler un problème, utilisez le rapport de bug intégré : décrivez ce 
 - [Sauvegardes, maintenance et désinstallation](wiki/Maintenance.md)
 - [Journal des modifications](CHANGELOG.md)
 
-## Politique de signature du code
-
-Signature de code gratuite fournie par [SignPath.io](https://signpath.io), certificat de la [SignPath Foundation](https://signpath.org). La demande auprès de la SignPath Foundation est en cours d'examen : tant qu'elle n'est pas acceptée, les versions publiées ne sont pas signées. Seul l'installateur Windows (`Bibliobrain-Setup-X.Y.Z.exe`) est signé, et uniquement lorsqu'il est construit à partir de ce dépôt par le [workflow de publication](.github/workflows/release.yml) sur GitHub Actions.
+## Mainteneur
 
 Rôles de l'équipe : le projet n'a qu'un seul mainteneur, [bibliOwl](https://github.com/bibliOwl), à la fois auteur des modifications, relecteur et approbateur. Les contributions extérieures sont relues et fusionnées par le mainteneur (voir [CONTRIBUTING.md](CONTRIBUTING.md)).
 

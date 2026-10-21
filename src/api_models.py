@@ -506,3 +506,8 @@ class IndexTransferPullRequest(IndexTransferTokenRequest):
 class IndexTransferImportRequest(IndexTransferTokenRequest):
     confirm: bool = False
     adopt_settings: bool = True
+
+
+class IndexTransferExportRequest(BaseModel):
+    # The indexed documents travel with the index unless the user opts out.
+    include_documents: bool = True

@@ -195,7 +195,8 @@ def _infer_metadata_source(path: Any) -> str:
     normalized = _normalize_text(path).lower()
     if not normalized:
         return "none"
-    return "bibtex" if normalized.endswith((".bib", ".bibtex", ".txt")) else "zotero"
+    # A .json file is a records snapshot from an index import: a file source too.
+    return "bibtex" if normalized.endswith((".bib", ".bibtex", ".txt", ".json")) else "zotero"
 
 
 def _normalize_metadata_source(value: Any, path: Any = "") -> str:

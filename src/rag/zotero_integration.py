@@ -100,6 +100,40 @@ def _legacy_file_signature(full_path: str) -> str:
     return f"{stat.st_size}:{stat.st_mtime_ns}"
 
 
+_PATH_ARTICLE_ID_MARK = "path-id-v1"
+
+
+def _rel_folder(rel_path: str) -> str:
+    return os.path.dirname(str(rel_path or "").replace("\\", "/").strip("/"))
+
+
+def _path_article_id(rel_path: str) -> str:
+    """Article id of a document no Zotero or BibTeX record names.
+
+    The file name alone is not unique once the library has sub-folders: two
+    papers both called "article.pdf" would merge into one. A file at the top
+    keeps the id it always had; one in a sub-folder adds a short hash of it.
+    """
+    stem = os.path.splitext(os.path.basename(str(rel_path or "").replace("\\", "/")))[0]
+    stem = stem or "article"
+    folder = _rel_folder(rel_path)
+    if not folder:
+        return stem
+    return f"{stem}-{hashlib.sha1(folder.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _index_signature(rel_path: str, item: ZoteroItem | None) -> str:
+    """What the index keeps about a document besides its text.
+
+    Adds a mark for documents whose id comes from their sub-folder path, so
+    an index built when the id was the bare file name re-reads them once.
+    """
+    signature = _zotero_signature(item)
+    if (item is not None and item.item_key) or not _rel_folder(rel_path):
+        return signature
+    return f"{signature}|{_PATH_ARTICLE_ID_MARK}" if signature else _PATH_ARTICLE_ID_MARK
+
+
 def _zotero_signature(item: ZoteroItem | None) -> str:
     if not item:
         return ""
@@ -126,6 +160,11 @@ def _zotero_signature(item: ZoteroItem | None) -> str:
             for annotation in item.annotations
         ],
     }
+    if item.shared_filename:
+        # These files used to be matched by name, maybe to another record:
+        # naming the record re-reads them once under their own key. Other
+        # signatures stay as they were, so nothing else is re-indexed.
+        payload["item_key"] = item.item_key
     raw = json_dumps_utf8(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 

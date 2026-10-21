@@ -192,6 +192,7 @@
     ['save-startup-embedding-model', 'click', function(event) { saveStartupEmbeddingModel() }],
     ['set-startup-step-library-focus', 'click', function(event) { setStartupStep('library', { focusHeading: true }) }],
     ['next-startup-step', 'click', function(event) { nextStartupStep() }],
+    ['start-startup-index-import', 'click', function(event) { startStartupIndexImport() }],
     ['close-nb-citation-graph', 'click', function(event) { closeNbCitationGraph() }],
     ['close-bug-report', 'click', function(event) { closeBugReport() }],
     ['submit-bug-report', 'submit', function(event) { submitBugReport(event) }],

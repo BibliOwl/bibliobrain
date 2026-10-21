@@ -4,7 +4,8 @@
 function inferMetadataSource(path) {
   const value = String(path || '').trim().toLowerCase();
   if (!value) return 'none';
-  return /\.(bib|bibtex|txt)$/.test(value) ? 'bibtex' : 'zotero';
+  // .json: records imported with an index, used like a BibTeX file.
+  return /\.(bib|bibtex|txt|json)$/.test(value) ? 'bibtex' : 'zotero';
 }
 
 function setMetadataSource(source, path = '') {
@@ -343,11 +344,24 @@ async function setDataPath() {
   const statusEl = document.getElementById('data-path-status');
   const result = await applyPdfDataPath(path);
   if (statusEl) {
-    statusEl.textContent = result.msg || '';
+    statusEl.textContent = describePdfFolderResult(result);
     statusEl.style.display = 'block';
   }
   if (!result.ok) showToast(result.msg || _tr('Erreur changement de dossier'));
   return result;
+}
+// Before the first preparation nothing is indexed yet: say what was found on
+// disk, sub-folders included, rather than "0 indexed".
+function describePdfFolderResult(result) {
+  if (!result?.ok || typeof result.document_count !== 'number') return result?.msg || '';
+  const total = Number(result.document_count || 0);
+  const prepared = Math.min(Number(result.indexed_count || 0), total);
+  if (!total) return _ti('settings.docs.folderEmpty') + (result.persist_warning || '');
+  let text = _ti('settings.docs.folderSaved', { count: total.toLocaleString() });
+  if (prepared < total) {
+    text += ' ' + _ti('settings.docs.folderPending', { count: (total - prepared).toLocaleString() });
+  }
+  return text + (result.persist_warning || '');
 }
 function showZoteroStatus(msg) {
   const el = document.getElementById('zotero-status');
@@ -870,6 +884,23 @@ async function nextStartupStep() {
   await runStartupBuildStep();
 }
 
+// Already set up on another computer: the exported index takes the place of
+// the preparation step. A folder typed here is kept, even empty: the import
+// copies the archive's PDFs into it. Without one, the import creates a folder
+// in Documents when the archive holds the PDFs.
+async function startStartupIndexImport() {
+  if (normalizeUserPathInput(document.getElementById('startup-data-path')?.value)) {
+    const saved = await saveStartupLibrary({ allowEmptyFolder: true });
+    if (!saved) return;
+  }
+  if (typeof saveUpdateCheckChoice === 'function') {
+    saveUpdateCheckChoice(Boolean(document.getElementById('startup-update-check')?.checked));
+  }
+  hideStartupHelp({ restoreFocus: false });
+  openSettingsAt('documents', 'index-import-btn');
+  await startIndexImportFromStartup();
+}
+
 function inferStartupMetadataSource(path) {
   return inferMetadataSource(path);
 }
@@ -1055,7 +1086,7 @@ function applyStartupOnlineMetadataChoice(metadataSource) {
   if (allowWeb && choice.checked) allowWeb.checked = true;
 }
 
-async function saveStartupLibrary() {
+async function saveStartupLibrary({ allowEmptyFolder = false } = {}) {
   if (state.startupLibrarySaving) return false;
   const metadataSource = getStartupMetadataSource();
   const zoteroInput = document.getElementById('startup-zotero-path');
@@ -1122,7 +1153,7 @@ async function saveStartupLibrary() {
       ? dataPathResult.document_count
       : null;
     state.startupDocumentCount = documentCount;
-    if (documentCount === 0) {
+    if (documentCount === 0 && !allowEmptyFolder) {
       setStartupGuideStatus('startup-library-status', _ti('startup.pdfFolderEmpty'), 'error');
       dataInput?.focus();
       return false;

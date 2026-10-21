@@ -16,6 +16,20 @@ top of the panel covers all settings.
   automatic detection, or choose a BibTeX file.
 - **Read scanned pages** makes PDFs containing photographs of pages searchable
   (see [First launch](First-launch-en.md)).
+- **Move to another computer**: **Export…** saves the search index, your PDFs and their
+  records (titles, authors, tags, notes) to a .zip file, without your conversations or
+  API keys. On the other computer, **Import…** checks the file and says what it will do;
+  one button downloads the missing model if needed, copies the missing PDFs, then
+  installs the index. A bar shows the progress.
+  - PDFs go into your PDF folder. Without one, Bibliobrain creates
+    **Documents\Bibliobrain PDF** and uses it. A file already there is never replaced.
+  - If your PDFs live in Zotero's folder, they are only copied there for the same synced
+    Zotero library.
+  - If this computer has neither Zotero nor a BibTeX file, the archive's records become
+    the metadata source, without re-indexing anything. You can connect Zotero later.
+  - **Show details** gives the full check. **Options** lets you export without the PDFs
+    (a much smaller file), skip the model download or keep your settings.
+  - A file over 4 GB does not fit on a USB stick formatted as FAT32.
 
 ### AI assistant
 

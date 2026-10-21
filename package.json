@@ -7,7 +7,7 @@
   "scripts": {
     "lint": "eslint static/js",
     "lint:fix": "eslint static/js --fix",
-    "test:browser": "node tests/drafting-citations.browser.cjs && node tests/drafting-interop.browser.cjs && node tests/settings-behavior.browser.cjs && node tests/library-drop.browser.cjs && node tests/update-consent.browser.cjs && node tests/startup-online-metadata.browser.cjs"
+    "test:browser": "node tests/drafting-citations.browser.cjs && node tests/drafting-interop.browser.cjs && node tests/settings-behavior.browser.cjs && node tests/library-drop.browser.cjs && node tests/update-consent.browser.cjs && node tests/startup-online-metadata.browser.cjs && node tests/index-transfer.browser.cjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

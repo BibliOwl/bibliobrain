@@ -9,17 +9,21 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import json
 import logging
 import os
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from functools import cache, lru_cache
 from html import unescape
+from typing import Any
 
 _logger = logging.getLogger(__name__)
 
 _ZOTERO_KEY_RE = re.compile(r"^[A-Z0-9]{8}$")
+# Records copied from another computer by an index import; used like a BibTeX file.
+METADATA_SNAPSHOT_FORMAT = "bibliobrain-metadata"
 
 
 @dataclass
@@ -65,6 +69,9 @@ class ZoteroItem:
     influential_citation_count: int = 0
     notes: list[str] = field(default_factory=list)
     annotations: list[ZoteroAnnotation] = field(default_factory=list)
+    # Another record has a PDF of the same name and used to be matched in its
+    # place: only a path can match this one (see load_zotero_library).
+    shared_filename: bool = False
 
     def first_author(self) -> str:
         return self.authors[0] if self.authors else ""
@@ -260,9 +267,66 @@ def _extract_extra_int(extra_value: str | None, *labels: str) -> int:
     return 0
 
 
+_PREF_LINE_RE = re.compile(r'^\s*user_pref\(\s*"([^"]+)"\s*,\s*(.+?)\s*\)\s*;\s*$', re.MULTILINE)
+_PREF_PREFIXES = ("extensions.zotero.", "extensions.zotmoov.")
+_MAX_PREFS_BYTES = 4 * 1024 * 1024
+
+
+def _zotero_prefs_files() -> list[str]:
+    """prefs.js of each Zotero profile (Windows, macOS, Linux)."""
+    files: list[str] = []
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        files += glob.glob(os.path.join(appdata, "Zotero", "Zotero", "Profiles", "*", "prefs.js"))
+    home = os.path.expanduser("~")
+    files += glob.glob(
+        os.path.join(home, "Library", "Application Support", "Zotero", "Profiles", "*", "prefs.js")
+    )
+    files += glob.glob(os.path.join(home, ".zotero", "zotero", "*", "prefs.js"))
+    return files
+
+
+def read_zotero_prefs() -> dict[str, object]:
+    """Zotero and ZotMoov preferences; the first profile wins on a clash."""
+    prefs: dict[str, object] = {}
+    for path in _zotero_prefs_files():
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                text = handle.read(_MAX_PREFS_BYTES)
+        except OSError:
+            continue
+        for name, raw_value in _PREF_LINE_RE.findall(text):
+            if not name.startswith(_PREF_PREFIXES) or name in prefs:
+                continue
+            try:
+                prefs[name] = json.loads(raw_value)
+            except ValueError:
+                continue
+    return prefs
+
+
+def _pref_text(prefs: dict[str, object], name: str) -> str:
+    value = prefs.get(name)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def find_zotero_db() -> str | None:
-    """Searches standard locations for zotero.sqlite."""
+    """Searches standard locations for zotero.sqlite.
+
+    A data directory chosen in Zotero's settings comes first, then the default
+    one (~/Zotero), then the profile folder Zotero 4 used.
+    """
     candidates: list[str] = []
+
+    prefs = read_zotero_prefs()
+    data_dir = _pref_text(prefs, "extensions.zotero.dataDir")
+    if data_dir and prefs.get("extensions.zotero.useDataDir") is not False:
+        configured = os.path.join(data_dir, "zotero.sqlite")
+        if os.path.isfile(configured):
+            candidates.append(configured)
+
+    home = os.path.expanduser("~")
+    candidates += glob.glob(os.path.join(home, "Zotero", "zotero.sqlite"))
 
     appdata = os.environ.get("APPDATA", "")
     if appdata:
@@ -278,7 +342,6 @@ def find_zotero_db() -> str | None:
             )
         )
 
-    home = os.path.expanduser("~")
     candidates += glob.glob(
         os.path.join(
             home,
@@ -292,7 +355,6 @@ def find_zotero_db() -> str | None:
         )
     )
     candidates += glob.glob(os.path.join(home, ".zotero", "zotero", "*", "zotero.sqlite"))
-    candidates += glob.glob(os.path.join(home, "Zotero", "zotero.sqlite"))
 
     return candidates[0] if candidates else None
 
@@ -301,6 +363,100 @@ def find_zotero_storage(db_path: str) -> str | None:
     """Returns the Zotero storage/ directory next to zotero.sqlite."""
     storage = os.path.join(os.path.dirname(db_path), "storage")
     return storage if os.path.isdir(storage) else None
+
+
+def _is_within(path: str, folder: str) -> bool:
+    try:
+        return os.path.commonpath(
+            [os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(folder))]
+        ) == os.path.normcase(os.path.abspath(folder))
+    except ValueError:
+        return False
+
+
+def _too_broad_for_pdf_folder(folder: str) -> bool:
+    """A drive root or the home folder would index far more than papers."""
+    normalized = os.path.normcase(os.path.abspath(folder))
+    home = os.path.normcase(os.path.abspath(os.path.expanduser("~")))
+    return normalized == home or os.path.dirname(normalized) == normalized
+
+
+def find_zotero_linked_pdf_folder(
+    db_path: str, *, prefs: dict[str, object] | None = None
+) -> str | None:
+    """Folder holding the PDFs Zotero only links to, when most of them are.
+
+    ZotMoov (and Zotero's "linked files") moves PDFs out of storage/, which
+    then keeps only what was not moved. Returns ZotMoov's destination folder,
+    or else the common folder of the linked PDFs, when at least half of them
+    sit inside it. None when most PDFs are still in storage/.
+    """
+    if not db_path or is_bibtex_source(db_path):
+        return None
+    try:
+        conn = _open_db(db_path)
+    except (OSError, ValueError, sqlite3.Error):
+        return None
+    try:
+        rows = conn.execute(
+            """
+            SELECT ia.path
+            FROM itemAttachments ia
+            LEFT JOIN deletedItems deleted ON deleted.itemID = ia.itemID
+            WHERE ia.contentType = 'application/pdf'
+              AND ia.parentItemID IS NOT NULL
+              AND deleted.itemID IS NULL
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+    prefs = read_zotero_prefs() if prefs is None else prefs
+    base_dir = _pref_text(prefs, "extensions.zotero.baseAttachmentPath")
+    stored = 0
+    linked = 0
+    linked_dirs: list[str] = []
+    for (raw_path,) in rows:
+        path = str(raw_path or "").strip()
+        if not path:
+            continue
+        if path.startswith("storage:"):
+            stored += 1
+            continue
+        linked += 1
+        resolved = _linked_attachment_path(path, base_dir)
+        if resolved:
+            linked_dirs.append(os.path.dirname(os.path.normpath(resolved)))
+    if linked <= stored:
+        return None
+
+    candidates: list[str] = []
+    zotmoov_dir = _pref_text(prefs, "extensions.zotmoov.dst_dir")
+    if zotmoov_dir:
+        candidates.append(zotmoov_dir)
+    if linked_dirs:
+        try:
+            candidates.append(os.path.commonpath(linked_dirs))
+        except ValueError:
+            pass  # PDFs spread over several drives
+    for folder in candidates:
+        if not os.path.isdir(folder) or _too_broad_for_pdf_folder(folder):
+            continue
+        if not linked_dirs and folder == zotmoov_dir:
+            return folder
+        inside = sum(1 for directory in linked_dirs if _is_within(directory, folder))
+        if linked_dirs and inside * 2 >= len(linked_dirs):
+            return folder
+    return None
+
+
+def suggest_zotero_pdf_folder(db_path: str) -> str | None:
+    """Where this Zotero library's PDFs are: linked-files folder, else storage/."""
+    if not db_path or is_bibtex_source(db_path):
+        return None
+    return find_zotero_linked_pdf_folder(db_path) or find_zotero_storage(db_path)
 
 
 def is_bibtex_source(path: str) -> bool:
@@ -312,7 +468,7 @@ def is_bibtex_source(path: str) -> bool:
     """
     candidate = str(path or "").strip()
     extension = os.path.splitext(candidate)[1].lower()
-    if extension in (".bib", ".bibtex"):
+    if extension in (".bib", ".bibtex") or is_metadata_snapshot(candidate):
         return True
     if extension in (".sqlite", ".sqlite3") or not os.path.isfile(candidate):
         return False
@@ -325,6 +481,74 @@ def is_bibtex_source(path: str) -> bool:
         return False
     text = sample.decode("utf-8-sig", errors="replace")
     return bool(re.search(r"(?im)^\s*@[a-z][\w-]*\s*[\{\(]", text))
+
+
+def is_metadata_snapshot(path: str) -> bool:
+    """Whether ``path`` is a records snapshot written by an index import.
+
+    Such a file is a metadata source like a BibTeX export: ``is_bibtex_source``
+    accepts it, so it is never opened as a Zotero database.
+    """
+    candidate = str(path or "").strip()
+    if not candidate.lower().endswith(".json") or not os.path.isfile(candidate):
+        return False
+    try:
+        with open(candidate, "rb") as handle:
+            sample = handle.read(256)
+    except OSError:
+        return False
+    return METADATA_SNAPSHOT_FORMAT.encode("ascii") in sample
+
+
+def item_to_snapshot(item: ZoteroItem) -> dict[str, Any]:
+    return asdict(item)
+
+
+def _item_from_snapshot(data: dict[str, Any]) -> ZoteroItem:
+    """Rebuild a record; unknown fields (a newer version's) are ignored."""
+    known = {item_field.name for item_field in fields(ZoteroItem)}
+    values: dict[str, Any] = {key: value for key, value in data.items() if key in known}
+    annotation_fields = {item_field.name for item_field in fields(ZoteroAnnotation)}
+    values["annotations"] = [
+        ZoteroAnnotation(**{key: value for key, value in annotation.items() if key in annotation_fields})
+        for annotation in values.get("annotations") or []
+        if isinstance(annotation, dict)
+    ]
+    return ZoteroItem(**values)
+
+
+def write_metadata_snapshot(path: str, items: dict[str, dict[str, Any]], *, origin: str = "") -> None:
+    """Write records keyed by document path; the format marker comes first."""
+    payload = {"format": METADATA_SNAPSHOT_FORMAT, "format_version": 1, "origin": origin, "items": items}
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False)
+    os.replace(temporary, path)
+
+
+def snapshot_items(payload: Any) -> dict[str, ZoteroItem]:
+    """The library of a snapshot payload, keyed like ``lookup_zotero_item`` expects."""
+    if not isinstance(payload, dict) or payload.get("format") != METADATA_SNAPSHOT_FORMAT:
+        raise RuntimeError("Not a Bibliobrain records snapshot.")
+    items = payload.get("items")
+    library: dict[str, ZoteroItem] = {}
+    for rel_path, data in (items if isinstance(items, dict) else {}).items():
+        key = str(rel_path or "").replace("\\", "/").strip("/").lower()
+        if key and isinstance(data, dict):
+            library[key] = _item_from_snapshot(data)
+    return library
+
+
+def _load_metadata_snapshot(path: str) -> dict[str, ZoteroItem]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Impossible to open the records snapshot: {exc}") from exc
+    return snapshot_items(payload)
 
 
 def is_zotero_storage_path(data_path: str, db_path: str | None) -> bool:
@@ -347,8 +571,17 @@ def _is_zotero_key(value: str) -> bool:
     return bool(_ZOTERO_KEY_RE.match(str(value or "").upper()))
 
 
-def lookup_zotero_item(rel_path: str, library: dict[str, ZoteroItem]) -> ZoteroItem | None:
-    """Resolves a PDF relative path to its Zotero item."""
+def lookup_zotero_item(
+    rel_path: str,
+    library: dict[str, ZoteroItem],
+    full_path: str | None = None,
+) -> ZoteroItem | None:
+    """Resolves a document path to its Zotero item, most precise match first.
+
+    The path decides before the file name: the attachment key folder of
+    storage/, then a linked file's absolute path, then the file name, which
+    the library only keeps when a single record uses it.
+    """
     if not library:
         return None
 
@@ -356,21 +589,32 @@ def lookup_zotero_item(rel_path: str, library: dict[str, ZoteroItem]) -> ZoteroI
     if normalized_rel_path in library:
         return library[normalized_rel_path]
 
-    filename = os.path.basename(normalized_rel_path).lower()
-    if filename in library:
-        return library[filename]
+    if full_path:
+        linked = library.get(zotero_path_key(full_path))
+        if linked is not None:
+            return linked
 
-    stem = os.path.splitext(filename)[0].lower()
-    if stem and stem in library:
-        return library[stem]
+    original_parts = [part for part in str(rel_path or "").replace("\\", "/").split("/") if part]
+    for part in original_parts[:-1]:
+        # Zotero names each storage/ folder after the attachment key, in upper
+        # case. An unknown key there is an attachment Zotero no longer has:
+        # no file-name guess for it. A lower-case "articles" is just a folder.
+        if part.isupper() and _is_zotero_key(part):
+            return library.get(part.lower())
 
     parts = [part for part in normalized_rel_path.split("/") if part]
-    for index, part in enumerate(parts):
-        if _is_zotero_key(part):
-            return library.get(part.lower())
+    for index in range(len(parts) - 1):
         tail = "/".join(parts[index:])
         if tail in library:
             return library[tail]
+
+    filename = os.path.basename(normalized_rel_path)
+    if filename in library:
+        return library[filename]
+
+    stem = os.path.splitext(filename)[0]
+    if stem and stem in library:
+        return library[stem]
 
     return None
 
@@ -393,7 +637,7 @@ def filter_active_zotero_pdf_entries(
     return [
         (rel_path, full_path)
         for rel_path, full_path in pdf_entries
-        if lookup_zotero_item(rel_path, library) is not None
+        if lookup_zotero_item(rel_path, library, full_path) is not None
     ]
 
 
@@ -928,6 +1172,8 @@ def load_zotero_library(
     """
     if not db_path:
         return {}
+    if is_metadata_snapshot(db_path):
+        return _load_metadata_snapshot(str(db_path).strip())
     if is_bibtex_source(db_path):
         return _load_bibtex_library(str(db_path).strip())
 
@@ -1148,6 +1394,8 @@ def load_zotero_library(
         conn.close()
 
     result: dict[str, ZoteroItem] = {}
+    filename_owners: dict[str, list[ZoteroItem]] = {}
+    base_dir = _pref_text(read_zotero_prefs(), "extensions.zotero.baseAttachmentPath")
 
     for row in attachments:
         parent_id = row["parent_id"]
@@ -1221,11 +1469,49 @@ def load_zotero_library(
         )
 
         filename = os.path.basename(attachment_path.replace("storage:", "").strip()).lower()
-        if filename and not (standalone and filename in result):
-            result[filename] = item
+        if filename:
+            owners = filename_owners.setdefault(filename, [])
+            # A dropped standalone PDF never competes with a real record.
+            if not (standalone and owners):
+                owners.append(item)
 
         attachment_key = (row["attachment_key"] or "").lower()
         if attachment_key:
             result[attachment_key] = item
 
+        linked_path = _linked_attachment_path(attachment_path, base_dir)
+        if linked_path:
+            result[zotero_path_key(linked_path)] = item
+
+    # A file name is only a fallback for files found outside storage/ and away
+    # from their linked path: shared by several records, it would pick one at
+    # random, so those records are told apart by path or not at all.
+    for filename, owners in filename_owners.items():
+        winner = owners[-1]
+        if len({owner.item_key or owner.item_id for owner in owners}) == 1:
+            result.setdefault(filename, winner)
+            continue
+        # Matching by name used to give every such file the last record read.
+        # Files of the other records were indexed under the wrong record.
+        for owner in owners:
+            if (owner.item_key or owner.item_id) != (winner.item_key or winner.item_id):
+                owner.shared_filename = True
+
     return result
+
+
+def zotero_path_key(path: str) -> str:
+    """Library key for a linked attachment's absolute path."""
+    return "path:" + os.path.normcase(os.path.normpath(str(path))).replace("\\", "/")
+
+
+def _linked_attachment_path(attachment_path: str, base_dir: str) -> str:
+    """Absolute path of a linked file; empty for files in storage/."""
+    path = str(attachment_path or "").strip()
+    if not path or path.startswith("storage:"):
+        return ""
+    if path.startswith("attachments:"):
+        if not base_dir:
+            return ""
+        path = os.path.join(base_dir, path[len("attachments:") :])
+    return path if os.path.isabs(path) else ""

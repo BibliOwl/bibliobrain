@@ -916,7 +916,7 @@ def resolve_pdf_metadata(
     allow_external_enrichment: bool = False,
 ) -> ZoteroItem | None:
     """Resolve authoritative, remote-cached, then local PDF metadata."""
-    primary = lookup_zotero_item(rel_path, library)
+    primary = lookup_zotero_item(rel_path, library, full_path)
     enrichment_enabled = _pdf_metadata_enrichment_enabled()
     needs_local_fallback = primary is None or not (primary.title and primary.authors)
     needs_fallback = needs_local_fallback or enrichment_enabled

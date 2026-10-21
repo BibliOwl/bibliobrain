@@ -521,6 +521,10 @@ function _refreshSettingsMetadataCard() {
   }
   const detect = document.getElementById('zotero-detect-btn');
   if (detect) detect.hidden = source !== 'none';
+  // Once a source is connected the header button is gone: a path typed by
+  // hand must still have a way back to the detected one.
+  const backToDefault = document.getElementById('zotero-default-btn');
+  if (backToDefault) backToDefault.hidden = source === 'none';
 }
 
 function _refreshSettingsOnlineSources() {
@@ -914,6 +918,19 @@ async function resetVectorDB() {
 // ---------------------------------------------
 let _indexTransferToken = '';
 let _indexTransferReport = null;
+// Set when the startup assistant handed over to the import: cancelling goes back to it.
+let _indexTransferFromStartup = false;
+
+function startIndexImportFromStartup() {
+  _indexTransferFromStartup = true;
+  return inspectVectorIndex();
+}
+
+function _returnToStartupAssistant() {
+  if (!_indexTransferFromStartup) return;
+  _indexTransferFromStartup = false;
+  if (typeof openStartupAssistant === 'function') openStartupAssistant();
+}
 
 function _setIndexTransferStatus(message, tone = 'cyan') {
   const status = document.getElementById('index-transfer-status');
@@ -925,12 +942,16 @@ function _setIndexTransferStatus(message, tone = 'cyan') {
 
 function _formatTransferBytes(bytes) {
   const value = Number(bytes || 0);
-  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} Go`;
-  return `${Math.max(1, Math.round(value / 1024 ** 2))} Mo`;
+  const english = typeof window.getLanguage === 'function' && window.getLanguage() === 'en';
+  if (value >= 1024 ** 3) {
+    const size = (value / 1024 ** 3).toFixed(1);
+    return english ? `${size} GB` : `${size.replace('.', ',')} Go`;
+  }
+  return `${Math.max(1, Math.round(value / 1024 ** 2))} ${english ? 'MB' : 'Mo'}`;
 }
 
 function _setIndexTransferBusy(busy) {
-  ['index-export-btn', 'index-import-btn'].forEach((id) => {
+  ['index-export-btn', 'index-import-btn', 'index-transfer-include-documents', 'index-transfer-auto-download', 'index-transfer-adopt'].forEach((id) => {
     const button = document.getElementById(id);
     if (button) button.disabled = busy;
   });
@@ -939,23 +960,119 @@ function _setIndexTransferBusy(busy) {
   });
 }
 
+// While a transfer request is in flight, the server publishes its progress.
+let _indexTransferProgressTimer = 0;
+
+function _renderIndexTransferProgress(progress) {
+  const wrap = document.getElementById('index-transfer-progress');
+  const bar = document.getElementById('index-transfer-progress-bar');
+  const text = document.getElementById('index-transfer-progress-text');
+  if (!wrap || !bar || !text) return;
+  if (!progress?.active || !progress.phase) {
+    wrap.hidden = true;
+    return;
+  }
+  const total = Number(progress.total || 0);
+  const done = Number(progress.done || 0);
+  const pct = total > 0 ? Math.min(100, Math.floor((done * 100) / total)) : null;
+  bar.classList.toggle('is-indeterminate', pct === null);
+  bar.querySelector('span').style.width = pct === null ? '' : `${pct}%`;
+  if (pct === null) bar.removeAttribute('aria-valuenow');
+  else bar.setAttribute('aria-valuenow', String(pct));
+  const key = pct === null ? `indexTransfer.progress.${progress.phase}Start` : `indexTransfer.progress.${progress.phase}`;
+  text.textContent = _ti(key, {
+    model: progress.label || '',
+    done: _formatTransferBytes(done),
+    total: _formatTransferBytes(total),
+    pct: pct ?? 0,
+  });
+  wrap.hidden = false;
+}
+
+async function _pollIndexTransferProgress() {
+  try {
+    const response = await fetch('/api/index-transfer/progress');
+    const progress = await response.json();
+    if (_indexTransferProgressTimer) _renderIndexTransferProgress(progress);
+  } catch (_) {
+    // The next tick tries again.
+  }
+}
+
+function _startIndexTransferProgress() {
+  _stopIndexTransferProgress();
+  _indexTransferProgressTimer = window.setInterval(_pollIndexTransferProgress, 500);
+}
+
+function _stopIndexTransferProgress() {
+  if (_indexTransferProgressTimer) window.clearInterval(_indexTransferProgressTimer);
+  _indexTransferProgressTimer = 0;
+  _renderIndexTransferProgress(null);
+}
+
+function _indexTransferIncludesDocuments() {
+  const box = document.getElementById('index-transfer-include-documents');
+  return box ? box.checked : true;
+}
+
+// File sizes only: shown next to the option, and before a large export.
+async function _loadIndexTransferEstimate() {
+  const target = document.getElementById('index-transfer-estimate');
+  try {
+    const response = await fetch('/api/index-transfer/export-estimate');
+    const d = await response.json();
+    if (!response.ok || d?.ok === false) {
+      if (target) target.textContent = '';
+      return null;
+    }
+    if (target) {
+      target.textContent = d.documents_found
+        ? _ti('indexTransfer.estimate', { count: d.documents_found, size: _formatTransferBytes(d.documents_bytes) })
+        : '';
+    }
+    return d;
+  } catch (_) {
+    return null;
+  }
+}
+
+document.addEventListener('toggle', (event) => {
+  if (event.target?.id === 'index-transfer-options' && event.target.open) void _loadIndexTransferEstimate();
+}, true);
+
 async function exportVectorIndex() {
+  const includeDocuments = _indexTransferIncludesDocuments();
   _setIndexTransferBusy(true);
   _setIndexTransferStatus(_ti('indexTransfer.exporting'));
   try {
-    const d = await postJsonOrThrow('/api/index-transfer/export', {}, 'Export impossible');
+    const estimate = includeDocuments ? await _loadIndexTransferEstimate() : null;
+    if (estimate?.documents_found) {
+      _setIndexTransferStatus(_ti('indexTransfer.exportingDocuments', {
+        count: estimate.documents_found,
+        size: _formatTransferBytes(Number(estimate.documents_bytes || 0) + Number(estimate.index_bytes || 0)),
+      }));
+    }
+    _startIndexTransferProgress();
+    const d = await postJsonOrThrow('/api/index-transfer/export', {
+      include_documents: includeDocuments,
+    }, 'Export impossible');
     if (d.cancelled) {
       _setIndexTransferStatus('');
       return;
     }
-    _setIndexTransferStatus(_ti('indexTransfer.exported', {
+    const message = [_ti(d.documents_included ? 'indexTransfer.exportedWithDocuments' : 'indexTransfer.exported', {
       count: d.document_count,
+      documents: d.documents_included,
       size: _formatTransferBytes(d.bytes),
       path: d.archive,
-    }), 'green');
+    })];
+    // FAT32 USB sticks refuse files of 4 GB or more.
+    if (Number(d.bytes || 0) >= 4 * 1024 ** 3) message.push(_ti('indexTransfer.largeFile'));
+    _setIndexTransferStatus(message.join(' '), 'green');
   } catch (e) {
     _setIndexTransferStatus(_ti('indexTransfer.failed', { error: e?.message || '?' }), 'red');
   } finally {
+    _stopIndexTransferProgress();
     _setIndexTransferBusy(false);
   }
 }
@@ -968,6 +1085,7 @@ async function inspectVectorIndex() {
     const d = await postJsonOrThrow('/api/index-transfer/inspect', {}, 'Vérification impossible');
     if (d.cancelled) {
       _setIndexTransferStatus('');
+      _returnToStartupAssistant();
       return;
     }
     _indexTransferToken = d.token;
@@ -1001,7 +1119,41 @@ function _indexTransferDocumentList(summaryKey, rows, total) {
   return `<details><summary class="disclosure">${escapeHtml(_ti(summaryKey, { count: total }))}</summary><ul>${items}${more}</ul></details>`;
 }
 
-function _indexTransferModelCard(embedding) {
+// The simple view fetches a missing model itself when the option allows it.
+function _indexTransferPlansDownload(report) {
+  const embedding = report?.embedding;
+  const auto = document.getElementById('index-transfer-auto-download');
+  return Boolean(embedding?.action === 'download' && embedding.can_download && (auto ? auto.checked : true));
+}
+
+function _indexTransferAdopts() {
+  const adopt = document.getElementById('index-transfer-adopt');
+  return adopt ? adopt.checked : true;
+}
+
+// What the import button will do, in order.
+function _indexTransferPlan(report, download) {
+  const embedding = report.embedding;
+  const copy = report.documents_copy;
+  const steps = [];
+  if (download) steps.push(_ti('indexTransfer.planDownload', { model: embedding.model_name }));
+  if (copy?.copy_count) {
+    steps.push(_ti(copy.set_data_path ? 'indexTransfer.planCopyNewFolder' : 'indexTransfer.planCopy', {
+      count: copy.copy_count, size: _formatTransferBytes(copy.copy_bytes), folder: copy.target,
+    }));
+  }
+  steps.push(_ti('indexTransfer.planInstall', { count: report.index.document_count }));
+  if (report.records?.use) steps.push(_ti('indexTransfer.planRecords', { count: report.records.count }));
+  if (!embedding.same_as_current && _indexTransferAdopts() && (download || embedding.action === 'switch')) {
+    steps.push(_ti('indexTransfer.planSwitch', { model: embedding.model_name }));
+  }
+  if (report.documents?.reindex_count) {
+    steps.push(_ti('indexTransfer.planReindex', { count: report.documents.reindex_count }));
+  }
+  return steps;
+}
+
+function _indexTransferModelCard(embedding, downloadPlanned = false) {
   const lines = [
     `<p>${escapeHtml(_ti('indexTransfer.modelUsed', { model: embedding.model_name, provider: embedding.provider_label }))}</p>`,
   ];
@@ -1021,7 +1173,7 @@ function _indexTransferModelCard(embedding) {
   if (!embedding.same_as_current && embedding.action !== 'equivalent' && embedding.current_model_name) {
     lines.push(`<p>${escapeHtml(_ti('indexTransfer.modelCurrent', { model: embedding.current_model_name }))}</p>`);
   }
-  if (embedding.can_download) {
+  if (embedding.can_download && !downloadPlanned) {
     lines.push(`<button class="btn btn-cyan btn-small" type="button" data-index-transfer-action="pull">${escapeHtml(_ti('indexTransfer.download', { model: embedding.model_name }))}</button>`);
   }
   if (embedding.action === 'download' && embedding.install_command) {
@@ -1031,15 +1183,19 @@ function _indexTransferModelCard(embedding) {
   return `<section class="index-transfer-card"><h4>${escapeHtml(_ti('indexTransfer.modelHeading'))}</h4>${lines.join('')}</section>`;
 }
 
-function _indexTransferDocumentsCard(documents) {
+function _indexTransferDocumentsCard(documents, copy = null) {
   const lines = [];
-  if (!documents.data_path_exists) {
+  const newFolder = copy?.mode === 'new_folder';
+  if (!documents.data_path_exists && !newFolder) {
     lines.push(`<p class="is-warn">${escapeHtml(_ti('indexTransfer.documentsNoFolder'))}</p>`);
   } else {
     const tone = documents.missing_count ? 'is-warn' : 'is-ok';
     lines.push(`<p class="${tone}">${escapeHtml(_ti('indexTransfer.documentsFound', {
       found: documents.found, total: documents.total, path: documents.data_path,
     }))}</p>`);
+    if (documents.copied_count) {
+      lines.push(`<p class="is-ok">${escapeHtml(_ti('indexTransfer.documentsCopied', { count: documents.copied_count }))}</p>`);
+    }
     lines.push(`<p>${escapeHtml(_ti('indexTransfer.documentsUnchanged', { count: documents.unchanged_count }))}</p>`);
     if (documents.reindex_count) {
       lines.push(`<p class="is-warn">${escapeHtml(_ti('indexTransfer.documentsReindex', { count: documents.reindex_count }))}</p>`);
@@ -1053,10 +1209,12 @@ function _indexTransferDocumentsCard(documents) {
   return `<section class="index-transfer-card"><h4>${escapeHtml(_ti('indexTransfer.documentsHeading'))}</h4>${lines.join('')}</section>`;
 }
 
-function _indexTransferLibraryCard(library, documents) {
+function _indexTransferLibraryCard(library, documents, records = null) {
   const lines = [];
   const usesZotero = library.exported_source === 'zotero' || library.current_source === 'zotero';
-  if (library.exported_source === 'none' && library.current_source === 'none') {
+  if (records?.use) {
+    lines.push(`<p class="is-ok">✓ ${escapeHtml(_ti('indexTransfer.libraryRecords', { count: records.count }))}</p>`);
+  } else if (library.exported_source === 'none' && library.current_source === 'none') {
     lines.push(`<p>${escapeHtml(_ti('indexTransfer.libraryNone'))}</p>`);
   } else {
     if (usesZotero) {
@@ -1084,39 +1242,59 @@ function _indexTransferLibraryCard(library, documents) {
   return `<section class="index-transfer-card"><h4>${escapeHtml(_ti('indexTransfer.libraryHeading'))}</h4>${lines.join('')}</section>`;
 }
 
+function _indexTransferIssueList(issues) {
+  if (!issues.length) return '';
+  const items = issues.map((issue) => (
+    `<li class="is-${escapeHtml(issue.level)}">${escapeHtml(issue.message)}</li>`
+  )).join('');
+  return `<ul class="index-transfer-issues">${items}</ul>`;
+}
+
+// Simple view: verdict, what the button will do, and only the points that need
+// the user. The three cards and the informative notes wait in "Voir le détail".
 function _renderIndexTransferReport(report) {
   const container = document.getElementById('index-transfer-report');
   if (!container || !report) return;
   _indexTransferReport = report;
-  const verdict = {
-    ready: ['green', 'indexTransfer.verdictReady'],
-    attention: ['amber', 'indexTransfer.verdictAttention'],
-    blocked: ['red', 'indexTransfer.verdictBlocked'],
-  }[report.verdict] || ['cyan', 'indexTransfer.verdictAttention'];
+  const detailOpen = Boolean(container.querySelector('.index-transfer-detail')?.open);
+  const download = _indexTransferPlansDownload(report);
+  // The planned download answers the "model missing" warning.
+  const issues = (report.issues || []).filter((issue) => !(download && issue.code === 'model_missing'));
+  const shown = issues.filter((issue) => issue.level !== 'info');
+  const notes = issues.filter((issue) => issue.level === 'info');
+  let verdict = ['green', download ? 'indexTransfer.verdictReadyDownload' : 'indexTransfer.verdictReady'];
+  if (!report.can_import) verdict = ['red', 'indexTransfer.verdictBlocked'];
+  else if (shown.length) verdict = ['amber', 'indexTransfer.verdictAttention'];
   const created = report.archive.created_at ? new Date(report.archive.created_at) : null;
   const meta = _ti('indexTransfer.reportMeta', {
     name: report.archive.name,
     date: created && !Number.isNaN(created.getTime()) ? created.toLocaleDateString() : '?',
     count: report.index.document_count,
   });
-  const issues = (report.issues || []).map((issue) => (
-    `<li class="is-${escapeHtml(issue.level)}">${escapeHtml(issue.message)}</li>`
-  )).join('');
+  const plan = report.can_import
+    ? `<ol class="index-transfer-plan">${_indexTransferPlan(report, download).map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+    : '';
+  const confirmLabel = download
+    ? _ti('indexTransfer.confirmDownload', { model: report.embedding.model_name })
+    : _ti('indexTransfer.confirm');
   container.innerHTML = `
     <div class="index-transfer-head"><strong>${escapeHtml(_ti('indexTransfer.reportTitle'))}</strong><span>${escapeHtml(meta)}</span></div>
     <div class="settings-status status-${verdict[0]}">${escapeHtml(_ti(verdict[1]))}</div>
-    <div class="index-transfer-grid">
-      ${_indexTransferModelCard(report.embedding)}
-      ${_indexTransferDocumentsCard(report.documents)}
-      ${_indexTransferLibraryCard(report.library, report.documents)}
-    </div>
-    ${issues ? `<ul class="index-transfer-issues">${issues}</ul>` : ''}
-    ${document.getElementById('debug-metrics')?.checked ? `<label class="settings-checkbox-row" for="index-transfer-adopt">
-      <input type="checkbox" id="index-transfer-adopt" checked>
-      <span>${escapeHtml(_ti('indexTransfer.adopt'))}</span>
-    </label>` : ''}
+    ${plan}
+    ${_indexTransferIssueList(shown)}
+    <details class="index-transfer-detail"${detailOpen ? ' open' : ''}>
+      <summary class="disclosure">${escapeHtml(_ti('indexTransfer.detail'))}</summary>
+      <div class="index-transfer-detail-body">
+        <div class="index-transfer-grid">
+          ${_indexTransferModelCard(report.embedding, download)}
+          ${_indexTransferDocumentsCard(report.documents, report.documents_copy)}
+          ${_indexTransferLibraryCard(report.library, report.documents, report.records)}
+        </div>
+        ${_indexTransferIssueList(notes)}
+      </div>
+    </details>
     <div class="index-transfer-actions">
-      <button class="btn btn-indigo" type="button" data-index-transfer-action="import">${escapeHtml(_ti('indexTransfer.confirm'))}</button>
+      <button class="btn btn-indigo" type="button" data-index-transfer-action="import">${escapeHtml(confirmLabel)}</button>
       <button class="btn btn-ghost" type="button" data-index-transfer-action="cancel">${escapeHtml(_ti('indexTransfer.cancel'))}</button>
     </div>`;
   container.hidden = false;
@@ -1124,6 +1302,15 @@ function _renderIndexTransferReport(report) {
     container.dataset.bound = '1';
     container.addEventListener('click', _onIndexTransferReportClick);
   }
+  // The options change the plan and the button: redraw the open report.
+  ['index-transfer-auto-download', 'index-transfer-adopt'].forEach((id) => {
+    const option = document.getElementById(id);
+    if (!option || option.dataset.indexTransferBound) return;
+    option.dataset.indexTransferBound = '1';
+    option.addEventListener('change', () => {
+      if (_indexTransferReport) _renderIndexTransferReport(_indexTransferReport);
+    });
+  });
   _setIndexTransferBusy(false);
 }
 
@@ -1131,8 +1318,10 @@ function _onIndexTransferReportClick(event) {
   const button = event.target.closest('[data-index-transfer-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.indexTransferAction;
-  if (action === 'cancel') _hideIndexTransferReport();
-  else if (action === 'import') confirmIndexTransferImport();
+  if (action === 'cancel') {
+    _hideIndexTransferReport();
+    _returnToStartupAssistant();
+  } else if (action === 'import') confirmIndexTransferImport();
   else if (action === 'pull') pullIndexTransferModel();
   else if (action === 'copy') {
     navigator.clipboard.writeText(button.dataset.command || '')
@@ -1147,6 +1336,7 @@ async function pullIndexTransferModel() {
   if (!confirm(_ti('indexTransfer.downloadPrompt', { model }))) return;
   _setIndexTransferBusy(true);
   _setIndexTransferStatus(_ti('indexTransfer.downloading', { model }));
+  _startIndexTransferProgress();
   try {
     const d = await postJsonOrThrow('/api/index-transfer/pull-model', {
       token: _indexTransferToken, confirm: true,
@@ -1156,29 +1346,75 @@ async function pullIndexTransferModel() {
   } catch (e) {
     _setIndexTransferStatus(_ti('indexTransfer.failed', { error: e?.message || '?' }), 'red');
   } finally {
+    _stopIndexTransferProgress();
     _setIndexTransferBusy(false);
   }
 }
 
+// One click: download the missing model if planned, then install the index.
+// The button's label names the download, so no second question is asked;
+// only replacing an index that already exists here asks for confirmation.
 async function confirmIndexTransferImport() {
-  if (!_indexTransferToken || !_indexTransferReport?.can_import) return;
-  if (!confirm(_ti('indexTransfer.confirmPrompt'))) return;
-  // The checkbox only exists in debug mode; otherwise settings are always aligned.
-  const adoptBox = document.getElementById('index-transfer-adopt');
-  const adopt = adoptBox ? adoptBox.checked : true;
+  const report = _indexTransferReport;
+  if (!_indexTransferToken || !report?.can_import) return;
+  if (report.existing_index?.exists && !confirm(_ti('indexTransfer.confirmPrompt'))) return;
+  const adopt = _indexTransferAdopts();
+  const download = _indexTransferPlansDownload(report);
   _setIndexTransferBusy(true);
-  _setIndexTransferStatus(_ti('indexTransfer.importing'));
+  _startIndexTransferProgress();
   try {
+    if (download) {
+      const model = report.embedding.model_name;
+      _setIndexTransferStatus(_ti('indexTransfer.downloadStep', { model }));
+      const pulled = await postJsonOrThrow('/api/index-transfer/pull-model', {
+        token: _indexTransferToken, confirm: true,
+      }, 'Téléchargement impossible');
+      if (pulled.report.embedding.action === 'download' || !pulled.report.can_import) {
+        _renderIndexTransferReport(pulled.report);
+        _setIndexTransferStatus(_ti('indexTransfer.downloadIncomplete', { model }), 'red');
+        return;
+      }
+      _indexTransferReport = pulled.report;
+    }
+    _setIndexTransferStatus(_ti(download ? 'indexTransfer.importStep' : 'indexTransfer.importing'));
     const d = await postJsonOrThrow('/api/index-transfer/import', {
       token: _indexTransferToken, confirm: true, adopt_settings: adopt,
     }, 'Import impossible');
     _hideIndexTransferReport();
     // An active index is loaded right away, with the usual progress display.
     // An inactive one is not: loading would build a new index for the current model.
-    _setIndexTransferStatus(d.active
-      ? ''
-      : _ti('indexTransfer.importedInactive', { count: d.document_count, model: d.embedding?.model_name || '' }),
-    'amber');
+    const copied = d.documents?.copied
+      ? ` ${_ti('indexTransfer.importedDocuments', { count: d.documents.copied, folder: d.documents.target })}`
+      : '';
+    if (d.active) {
+      _setIndexTransferStatus(_ti('indexTransfer.importedActive', { count: d.document_count }) + copied, 'green');
+    } else {
+      _setIndexTransferStatus(_ti('indexTransfer.importedInactive', {
+        count: d.document_count, model: d.embedding?.model_name || '',
+      }) + copied, 'amber');
+    }
+    if (d.documents?.data_path_set) {
+      // The import created the PDF folder: show it as the chosen one.
+      state.dataPathConfigured = true;
+      if (state.appSettings) {
+        state.appSettings.data_path = d.documents.target;
+        state.appSettings.data_path_configured = true;
+      }
+      if (typeof syncPdfPathInputs === 'function') syncPdfPathInputs(d.documents.target);
+    }
+    if (d.records?.used && d.records.path) {
+      // The archive's records became the metadata source, like a BibTeX file.
+      if (typeof setMetadataSource === 'function') setMetadataSource('bibtex', d.records.path);
+      const metadataInput = document.getElementById('zotero-path');
+      if (metadataInput) metadataInput.value = d.records.path;
+      if (state.appSettings) state.appSettings.zotero_path = d.records.path;
+    }
+    if (_indexTransferFromStartup) {
+      _indexTransferFromStartup = false;
+      // The imported index replaces the assistant's preparation step.
+      if (d.active && typeof persistStartupOnboardingDone === 'function') await persistStartupOnboardingDone();
+      if (d.active && typeof _rememberStartupGuideDone === 'function') _rememberStartupGuideDone();
+    }
     state.ragReady = false;
     state.autoInitAttempted = false;
     if (typeof loadRagSettings === 'function') await loadRagSettings();
@@ -1192,6 +1428,7 @@ async function confirmIndexTransferImport() {
   } catch (e) {
     _setIndexTransferStatus(_ti('indexTransfer.failed', { error: e?.message || '?' }), 'red');
   } finally {
+    _stopIndexTransferProgress();
     _setIndexTransferBusy(false);
   }
 }

@@ -332,7 +332,9 @@ _PAPER_LIST_TOOL = "search.local_articles"
 # (a new topic) is not mistaken for a continuation of the previous list.
 _LIST_CONTINUATION_MARKER_RE = re.compile(
     r"\b(?:autres?|encore|suite|reste|plus|tout|tous|toutes|more|other|others|"
-    r"else|rest|all|continue|continuer|continues)\b"
+    r"else|rest|all|continue|continuer|continues|"
+    # "seulement 3 ?", "only three?", "il n'y en a que 3 ?" doubt the count.
+    r"seulement|only|juste|just|uniquement|y en a que?)\b"
 )
 _LIST_CONTINUATION_WORDS = frozenset(
     "a ai as au autre autres aux avez avoir c ca ce cela ceux celles cite citer cites citez d de des donne "
@@ -343,7 +345,9 @@ _LIST_CONTINUATION_WORDS = frozenset(
     "all and any anything are can cite continue could else give have is it keep list me "
     "more of ok other others please rest show some the them there they what yes you "
     "continuer continues "
-    "papers paper studies"
+    "papers paper studies "
+    "seulement juste uniquement que only just that those "
+    "deux trois quatre cinq six sept huit neuf dix two three four five seven eight nine ten"
     .split()
 )
 _LIST_CORRECTION_RE = re.compile(
@@ -372,7 +376,7 @@ def _is_list_continuation(message: str) -> bool:
     return (
         0 < len(words) <= 10
         and bool(_LIST_CONTINUATION_MARKER_RE.search(" ".join(words)))
-        and all(word in _LIST_CONTINUATION_WORDS for word in words)
+        and all(word in _LIST_CONTINUATION_WORDS or word.isdigit() for word in words)
     )
 
 
