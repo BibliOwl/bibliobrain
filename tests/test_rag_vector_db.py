@@ -1338,14 +1338,43 @@ def test_response_style_guide_treats_library_themes_as_supplied_context(
     rag = _load_rag_modules(workspace_tmp_dir)
     monkeypatch.setattr(rag.query_engine, "get_app_settings", lambda: {"ui_language": "en"})
 
-    guide = rag.query_engine._build_response_style_guide(
-        "What are the main themes in my library?",
-        model_name="lfm2.5:8b",
-    )
+    task = rag.query_engine._library_overview_task("What are the main themes in my library?", [])
 
-    assert "Library-overview task" in guide
-    assert "do not claim that no library context was supplied" in guide
-    assert "indexed evidence" in guide
+    assert "Library-overview task" in task
+    assert "do not claim that no library context was supplied" in task
+    assert "indexed evidence" in task
+    assert "Group of N articles" not in task
+    assert rag.query_engine._library_overview_task("What is AC loss?", []) == ""
+
+
+@pytest.mark.parametrize("language", ["en", "fr"])
+def test_overview_task_reaches_qwen35_with_the_theme_group_header(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+    language: str,
+) -> None:
+    # The style guide is cut from qwen3.5 prompts: the overview task used to
+    # live there, and the default chat model listed the papers one by one.
+    from src.llm_provider import _prepare_ollama_chat_messages_for_thinking
+
+    rag = _load_rag_modules(workspace_tmp_dir)
+    qe = rag.query_engine
+    monkeypatch.setattr(qe, "get_app_settings", lambda: {"ui_language": language})
+    note = qe._overview_theme_note("Cable · AC Loss", 12, ["A title"])
+    doc = Document(
+        page_content="Striated tapes reduce the AC loss of cables.",
+        metadata={"source": "a.pdf", "zotero_title": "Low AC loss cable", "library_theme_note": note},
+    )
+    question = "Quels sont les thèmes principaux de ma bibliothèque ?"
+
+    messages = qe.build_chat_messages(question, [doc], [doc], model_name="qwen3.5:2b")
+    sent = _prepare_ollama_chat_messages_for_thinking("qwen3.5:2b", messages, False)
+    user = sent[-1]["content"]
+
+    assert ("Library-overview task" if language == "en" else "Tache de vue d'ensemble") in user
+    # The task quotes the header the theme note gives each source.
+    assert note.split(",")[0].replace("12", "N") in user
+    assert note in sent[0]["content"]
 
 
 def test_library_overview_document_selection_prefers_distinct_articles(
@@ -1397,6 +1426,8 @@ def test_library_overview_retrieval_widens_pool_and_returns_distinct_articles(
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(rag.query_engine, "_is_reranker_enabled", lambda: False)
+    # No theme tree (nothing classified yet): the overview searches the index.
+    monkeypatch.setattr(rag.query_engine, "_library_taxonomy_payload", lambda: {})
 
     selected = rag.query_engine._retrieve_documents(
         "What are the main themes in my library?",
@@ -1408,6 +1439,188 @@ def test_library_overview_retrieval_widens_pool_and_returns_distinct_articles(
 
     assert requested_k == [64]
     assert [doc.metadata["article_id"] for doc in selected] == ["A", "B", "C"]
+
+
+_PROSE = "This paper studies the problem in depth and reports measured results. " * 6
+
+
+def _taxonomy_payload(groups: dict[str, tuple[str, list[tuple[str, str]]]]) -> dict[str, Any]:
+    """A theme tree under one root: node id -> (label, [(title, path), ...])."""
+    nodes = [{"id": "root", "label": "Research"}]
+    nodes.extend({"id": node_id, "label": label} for node_id, (label, _) in groups.items())
+    return {
+        "nodes": nodes,
+        "children_by_parent": {"root": list(groups)},
+        "articles_by_concept": {
+            "root": [
+                {"title": title, "path": path}
+                for _, articles in groups.values()
+                for title, path in articles
+            ],
+            **{
+                node_id: [{"title": title, "path": path} for title, path in articles]
+                for node_id, (_, articles) in groups.items()
+            },
+        },
+        "stats": {"cache_hit": True},
+    }
+
+
+def _fake_article_chunks(
+    searched: list[str],
+) -> Any:
+    def collect(query: str, *, k: int, source_paths: list[str]) -> list[tuple[Document, float]]:
+        path = source_paths[0]
+        searched.append(path)
+        metadata = {"rel_path": path, "source": path, "zotero_title": query, "page": 1}
+        contents = "TABLE DES MATIERES ....... 3\n" + _PROSE
+        return [
+            (Document(page_content=contents, metadata=metadata), 0.9),
+            (Document(page_content="Too short.", metadata=metadata), 0.8),
+            (Document(page_content=f"{path}: {_PROSE}", metadata={**metadata, "page": 2}), 0.5),
+        ]
+
+    return collect
+
+
+def test_library_overview_takes_one_prose_passage_per_main_theme(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    qe = rag.query_engine
+    monkeypatch.setattr(qe, "get_app_settings", lambda: {"ui_language": "fr"})
+    payload = _taxonomy_payload(
+        {
+            "small": ("Plasma · Thruster", [("Microwave plasma thruster", "p/1.pdf")]),
+            "large": (
+                "Cable · AC Loss",
+                [
+                    ("Quench detection in magnets", "c/1.pdf"),
+                    ("AC loss of a twisted cable", "c/2.pdf"),
+                    ("AC loss of a twisted cable", "c/2-copy.pdf"),
+                    ("Screening currents in coils", "c/3.pdf"),
+                ],
+            ),
+            "hidden": ("Excluded · Topic", [("An excluded paper", "x/1.pdf")]),
+        }
+    )
+    monkeypatch.setattr(qe, "_library_taxonomy_payload", lambda: payload)
+    monkeypatch.setattr(qe, "excluded_path_keys", lambda: frozenset({"x/1.pdf"}))
+    searched: list[str] = []
+    monkeypatch.setattr(qe, "_collect_source_scored_docs", _fake_article_chunks(searched))
+    monkeypatch.setattr(
+        qe,
+        "_collect_scored_docs",
+        lambda *a, **kw: pytest.fail("the overview must not search the index"),
+    )
+
+    docs = qe._retrieve_documents(
+        "Quels sont les thèmes principaux de ma bibliothèque ?",
+        threshold=0.0,
+        max_chunks=10,
+        filters={},
+    )
+
+    # Largest group first (the copy of a paper counts once), its title closest
+    # to the label stands for it, the excluded paper is left out.
+    assert [doc.metadata["rel_path"] for doc in docs] == ["c/2.pdf", "p/1.pdf"]
+    assert searched == ["c/2.pdf", "p/1.pdf"]
+    assert all(doc.metadata["page"] == 2 for doc in docs)
+    note = docs[0].metadata["library_theme_note"]
+    assert "Groupe de 3 articles" in note
+    assert "Cable · AC Loss" in note
+    assert "Quench detection in magnets" in note
+    assert "Screening currents in coils" in note
+    # The note reaches the model beside the passage, not inside it: the
+    # sources panel shows the passage as it is in the paper.
+    assert "Groupe" not in docs[0].page_content
+    context = qe._format_context_for_direct_chat(docs)
+    assert note in context
+    assert note in qe.grounding_passages(docs)[0]
+
+
+def test_library_overview_of_a_single_document_describes_it(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    qe = rag.query_engine
+    monkeypatch.setattr(qe, "get_app_settings", lambda: {"ui_language": "en"})
+    payload = {
+        "nodes": [{"id": "only", "label": "Thesis · Magnet"}],
+        "children_by_parent": {},
+        "articles_by_concept": {"only": [{"title": "My thesis", "path": "thesis.pdf"}]},
+    }
+    monkeypatch.setattr(qe, "_library_taxonomy_payload", lambda: payload)
+    monkeypatch.setattr(qe, "_collect_source_scored_docs", _fake_article_chunks([]))
+
+    docs = qe._retrieve_documents(
+        "What are the main themes in my library?", threshold=0.0, max_chunks=6, filters={}
+    )
+
+    assert [doc.metadata["rel_path"] for doc in docs] == ["thesis.pdf"]
+    assert docs[0].metadata["library_theme_note"] == (
+        "Group of 1 articles in the library, keywords: Thesis · Magnet."
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "filters"),
+    [
+        (RuntimeError("taxonomy failed"), {}),
+        # Only tables of contents in the paper: no passage, so the search runs.
+        (
+            {
+                "nodes": [{"id": "a", "label": "A"}],
+                "children_by_parent": {},
+                "articles_by_concept": {"a": [{"title": "Index", "path": "a.pdf"}]},
+            },
+            {},
+        ),
+        # A collection narrows the library; the theme tree covers all of it.
+        (pytest.fail, {"collections": ["Magnets"]}),
+    ],
+)
+def test_library_overview_falls_back_to_search_without_theme_passages(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+    payload: Any,
+    filters: dict[str, list[str]],
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    qe = rag.query_engine
+
+    def taxonomy() -> dict[str, Any]:
+        if isinstance(payload, Exception):
+            raise payload
+        if payload is pytest.fail:
+            pytest.fail("filtered overview must not read the theme tree")
+        return payload
+
+    monkeypatch.setattr(qe, "_library_taxonomy_payload", taxonomy)
+    monkeypatch.setattr(
+        qe,
+        "_collect_source_scored_docs",
+        lambda query, *, k, source_paths: [
+            (Document(page_content="Index ..... 12", metadata={"rel_path": "a.pdf"}), 0.9)
+        ],
+    )
+    searched = Document(
+        page_content="Magnet design.",
+        metadata={"article_id": "M", "source": "m.pdf", "zotero_collections": "Magnets"},
+    )
+    monkeypatch.setattr(qe, "_collect_scored_docs", lambda *a, **kw: [(searched, 0.9)])
+    monkeypatch.setattr(qe, "_collect_lexical_metadata_docs", lambda *a, **kw: [])
+    monkeypatch.setattr(qe, "_doc_matches_filters", lambda metadata, filters: True)
+    monkeypatch.setattr(qe, "_is_reranker_enabled", lambda: False)
+
+    docs = qe._retrieve_documents(
+        "What are the main themes in my library?", threshold=0.0, max_chunks=3, filters=filters
+    )
+
+    assert [doc.page_content for doc in docs] == ["Magnet design."]
+    assert "library_theme_note" not in docs[0].metadata
 
 
 def test_named_query_anchors_ignore_french_imperative_clitics(

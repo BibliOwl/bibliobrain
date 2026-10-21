@@ -52,6 +52,13 @@ def test_questions_naming_their_subject_stand_alone(question: str) -> None:
     assert not qe._is_follow_up_question(question)
 
 
+@pytest.mark.parametrize("message", ["test", "Merci !", "ok", "Bonjour"])
+def test_greetings_and_tests_are_not_follow_ups(message: str) -> None:
+    # "test" after the library overview used to re-run it with the old
+    # question, and the model repeated its previous answer.
+    assert not qe._is_follow_up_question(message)
+
+
 def test_previous_question_is_added_to_follow_ups_only() -> None:
     history = [
         {"role": "user", "content": "Comment fonctionne la pompe de flux cylindrique ?"},
