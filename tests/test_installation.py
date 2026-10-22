@@ -800,7 +800,7 @@ def test_ci_enforces_quality_tests_and_security_scans() -> None:
     assert "npm audit --audit-level=high --ignore-scripts" in workflow
     assert "npm run test:browser" in workflow
     assert "pip-audit==2.10.1" in development_requirements
-    assert "uv==0.11.19" in development_requirements
+    assert "uv==0.13.4" in development_requirements
 
 
 def test_public_bugsink_reporting_is_installed_and_configurable() -> None:
@@ -821,7 +821,8 @@ def test_public_bugsink_reporting_is_installed_and_configurable() -> None:
     assert "send_default_pii=False" in bug_reports
     assert "traces_sample_rate=0.0" in bug_reports
     version = _read("VERSION").strip()
-    assert re.fullmatch(r"\d+\.\d+\.\d+", version)
+    # Same grammar as build-installer.ps1: prereleases (0.9.0-beta.1) are valid too.
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?", version)
     assert "BIBLIOBRAIN_VERSION" not in configuration_example
     assert 'id="app-version-badge"' in html
     assert re.search(r"v0\.\d+\.\d+", html) is None

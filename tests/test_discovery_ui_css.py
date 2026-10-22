@@ -131,3 +131,17 @@ def test_discovery_debug_is_removed_when_debug_mode_is_disabled() -> None:
     assert "debugEl.innerHTML = ''" in visibility
     assert "if (!enabled)" in visibility
     assert "clearDiscoveryDebug();" in visibility
+
+
+def test_discovery_model_menu_is_not_clipped_by_the_query_box() -> None:
+    # app.css clips the query box (overflow: hidden). The model menu opens inside it,
+    # so it was cut off, and focusing its first item scrolled the box: the query
+    # field slid out of view. workspaces.css must lift the clip on that box too.
+    workspaces = (Path(__file__).parents[1] / "static" / "css" / "workspaces.css").read_text(
+        encoding="utf-8"
+    )
+    rule = next(
+        line for line in workspaces.splitlines() if line.startswith("#discovery-search-form.discovery-composer")
+    )
+    assert ".discovery-composer .discovery-query-actions" in rule
+    assert "overflow: visible" in rule

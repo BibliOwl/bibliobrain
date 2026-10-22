@@ -18,7 +18,7 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
 
 ## [Non publié]
 
-## [0.8.1-beta.2] - 2026-10-21
+## [0.8.1] - 2026-10-22
 
 ### Ajouté
 
@@ -58,11 +58,21 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
   que les thèmes étaient introuvables ou listaient des titres au hasard. Les modèles
   `qwen3.5` reçoivent maintenant la consigne de regrouper en 2 à 4 thèmes ; « test » ou
   « merci » ne relancent plus la vue d'ensemble précédente.
+- Changer d'ordinateur, disque plein : l'import additionne tout ce qui va sur le même disque
+  (PDF et index) avant d'écrire quoi que ce soit, au lieu de répondre « Erreur interne du
+  transfert » en cours de route. Si le disque se remplit quand même, le message dit que
+  l'index n'a pas été remplacé. L'export refuse une destination trop petite.
+- Mise à jour avec le paquet ZIP : une fenêtre annonce la fin de `Update-Bibliobrain.cmd` et
+  propose d'ouvrir Bibliobrain ; pendant la mise à jour, le raccourci ne la lance plus.
+- Découverte : ouvrir la liste des modèles faisait disparaître le champ de recherche et la
+  liste était coupée par le cadre. Elle s'affiche maintenant en entier.
 
 ### Sécurité
 
 - Pillow passe en 13.0.0 (huit failles corrigées) et certifi en 2026.10.19. Pillow lit les
   images extraites des PDF.
+- pypdf passe en 6.21.2 (cinq failles corrigées). pypdf lit le texte des PDF de la
+  bibliothèque.
 
 ## [0.8.0] - 2026-10-20
 

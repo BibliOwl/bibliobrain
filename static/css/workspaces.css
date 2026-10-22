@@ -409,7 +409,9 @@ dialog#nb-create-form #nb-new-title, dialog#nb-create-form #nb-zotero-collection
 #drafting-assistant .drafting-job .drafting-notebook-search { grid-template-columns: minmax(0, 1fr); }
 #drafting-assistant .drafting-job .drafting-notebook-search select, #drafting-assistant .drafting-job .drafting-notebook-search input { width: 100%; min-width: 0; }
 #drafting-assistant .drafting-editor-more-menu #drafting-token-estimate { display: block; }
-#discovery-search-form.discovery-composer, .discovery-composer .discovery-search-body { overflow: visible; }
+/* The model menu opens below its chip: no box around it may clip it. A clipping box
+   also scrolls when the menu takes focus, which pushed the query field out of view. */
+#discovery-search-form.discovery-composer, .discovery-composer .discovery-search-body, .discovery-composer .discovery-query-actions { overflow: visible; }
 
 /* ---- Discovery: search again, selection, matching passage, grouped history ---- */
 .discovery-search-meta { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 0.8rem; color: var(--muted); }

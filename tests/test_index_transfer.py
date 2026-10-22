@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import shutil
 import sqlite3
@@ -909,3 +910,104 @@ def test_api_progress_is_local_only(monkeypatch: Any) -> None:
 
     client = TestClient(app)
     assert client.get("/api/index-transfer/progress").json() == {"ok": True, "active": False}
+
+# ------ Disk space (2026-10-22 Linux report) --------------------
+
+
+def test_needs_on_one_disk_add_up_before_anything_is_copied(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    """The VM case: the PDFs fit, the index fits, both together do not."""
+    archive = _export_with_documents(env)
+    _move_to_second_computer(env)
+    monkeypatch.setattr(index_transfer, "_disk_key", lambda location: "same-disk")
+    monkeypatch.setattr(index_transfer, "_free_bytes", lambda location=None: 10**12)
+    roomy = index_transfer.inspect_archive(archive)
+    assert roomy["can_import"] is True
+    [disk] = roomy["disk"]["disks"]
+    copy_need = int(roomy["documents_copy"]["copy_bytes"] * 1.02)
+    index_need = disk["required_bytes"] - copy_need
+    assert copy_need > 1 and index_need > 1
+    monkeypatch.setattr(index_transfer, "_free_bytes", lambda location=None: disk["required_bytes"] - 1)
+
+    report = index_transfer.inspect_archive(archive)
+
+    assert report["can_import"] is False
+    message = next(issue["message"] for issue in report["issues"] if issue["code"] == "disk_space")
+    assert "l'index et les PDF de l'archive" in message
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.import_archive(archive)
+    assert error.value.code == "disk_space"
+    assert not (Path(config.DATA_PATH) / "c.pdf").exists(), "nothing copied before the check"
+
+
+def test_needs_on_different_disks_are_checked_separately(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    needs = [("C:/index", 600), ("D:/pdfs", 600)]
+    monkeypatch.setattr(index_transfer, "_free_bytes", lambda location=None: 1000)
+    monkeypatch.setattr(index_transfer, "_disk_key", lambda location: str(location)[0])
+    assert index_transfer.check_disk_space(needs)["ok"] is True
+    monkeypatch.setattr(index_transfer, "_disk_key", lambda location: "same")
+    check = index_transfer.check_disk_space(needs)
+    assert check["ok"] is False
+    assert (check["required_bytes"], check["free_bytes"]) == (1200, 1000)
+
+
+def test_a_disk_filling_up_during_import_is_reported_and_keeps_the_index(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    archive = _export_with_documents(env)
+    _move_to_second_computer(env)
+    previous = _profile_dir()
+    previous.mkdir(parents=True)
+    (previous / "chroma.sqlite3").write_bytes(b"previous index")
+
+    def full(_archive_path: str, staging: Path) -> None:
+        staging.mkdir(parents=True)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(index_transfer, "_extract_index", full)
+
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.import_archive(archive)
+
+    assert error.value.code == "disk_space"
+    assert "ne seront pas recopiés" in error.value.message
+    assert (previous / "chroma.sqlite3").read_bytes() == b"previous index"
+    assert not list(previous.parent.glob(".import-*"))
+    assert index_transfer.transfer_progress() == {"active": False}
+
+
+def test_a_full_destination_during_export_leaves_no_file(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    lexical = _build_index(env)
+    lexical.close()
+
+    def full(*_args: Any, **_kwargs: Any) -> str:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(index_transfer, "_store_document", full)
+    target = env.root / "transfer" / "full.zip"
+
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.export_active_index(target, include_documents=True)
+
+    assert error.value.code == "disk_space"
+    assert not target.exists()
+    assert not list(target.parent.glob(".full.zip.*"))
+
+
+def test_export_refuses_a_destination_too_small_for_the_documents(
+    env: SimpleNamespace, monkeypatch: Any
+) -> None:
+    lexical = _build_index(env)
+    lexical.close()
+    monkeypatch.setattr(index_transfer, "_free_bytes", lambda location=None: 10)
+
+    with pytest.raises(index_transfer.IndexTransferError) as error:
+        index_transfer.export_active_index(env.root / "transfer" / "small.zip", include_documents=True)
+
+    assert error.value.code == "disk_space"
+    assert "sans les PDF" in error.value.message
