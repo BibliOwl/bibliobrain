@@ -417,7 +417,7 @@ def test_double_click_entrypoint_and_maintenance_manager_exist() -> None:
     assert "function Backup-Bibliobrain" in manager
     assert "function Restore-Bibliobrain" in manager
     assert "function Update-PackagedBibliobrain" in manager
-    assert 'ProductName -ne "Bibliobrain"' in manager
+    assert '([string]$file.VersionInfo.ProductName).Trim() -ne "Bibliobrain"' in manager
     assert "Get-AuthenticodeSignature" in manager
     assert "Refusing to replace Bibliobrain" in manager
     assert "Backup-Bibliobrain -Destination $BackupPath" in manager

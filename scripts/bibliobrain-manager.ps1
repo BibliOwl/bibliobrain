@@ -618,7 +618,9 @@ function Test-BibliobrainInstaller {
         throw "Bibliobrain installer not found: $resolved"
     }
     $file = Get-Item -LiteralPath $resolved
-    if ($file.VersionInfo.ProductName -ne "Bibliobrain") {
+    # Inno Setup pads its version strings with spaces to a fixed width,
+    # so the raw value is "Bibliobrain" followed by about 50 spaces.
+    if (([string]$file.VersionInfo.ProductName).Trim() -ne "Bibliobrain") {
         throw "The selected executable is not identified as a Bibliobrain installer."
     }
     $installerVersionText = ([string]$file.VersionInfo.ProductVersion).Trim()

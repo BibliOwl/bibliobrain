@@ -1047,3 +1047,18 @@ def test_crossref_reference_reads_author_and_year_from_raw_text(
         ordinal=2,
     )
     assert (work["authors"], work["year"]) == (["Brandt"], 1996)
+
+
+def test_paper_lookup_hints_split_zotero_filenames_in_linear_time() -> None:
+    import time
+
+    from src.citation_graph import _paper_lookup_hints
+
+    assert _paper_lookup_hints("Smith  -  2020 - Un titre - suite.pdf", None) == (
+        "Un titre - suite",
+        "2020",
+        "Smith",
+    )
+    started = time.monotonic()
+    _paper_lookup_hints("a" + " " * 100_000 + "b.pdf", None)
+    assert time.monotonic() - started < 2.0

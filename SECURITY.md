@@ -14,9 +14,9 @@ joignez ni document confidentiel ni clé API.
 ### ChromaDB — avis serveur et configuration de collection
 
 - **Statut :** acceptée temporairement
-- **Version utilisée :** `chromadb==1.5.7`
+- **Version utilisée :** `chromadb==1.5.9`
 - **Échéance de révision :** 31 octobre 2026, et avant chaque publication
-- **Dernière révision :** 20 octobre 2026 — aucune version corrigée publiée
+- **Dernière révision :** 22 octobre 2026 — aucune version corrigée publiée
 - **Condition de retrait :** adopter la première version corrigée compatible, puis retirer
   l’exception de la CI
 
@@ -29,7 +29,7 @@ Les exceptions couvrent actuellement les avis suivants :
 | `PYSEC-2026-3814` | `CVE-2026-45833` | exécution de code après modification serveur d’une collection avec `trust_remote_code` | non exposé : aucune API Chroma ni modification de configuration |
 | `PYSEC-2026-3815` | `CVE-2026-45831` | `SimpleRBACAuthorizationProvider` ignore la ressource tenant/base/collection | non exposé : aucun fournisseur d’authentification Chroma |
 
-Au 20 octobre 2026, les quatre fiches OSV donnent `chromadb` 1.5.9 comme dernière version
+Au 22 octobre 2026, les quatre fiches OSV donnent `chromadb` 1.5.9 comme dernière version
 affectée, et 1.5.9 (5 mai 2026) est la dernière version publiée : aucune version corrigée
 n’existe. `langchain-chroma==1.1.0`, toujours la dernière version, exige `chromadb>=1.3.5,<2`.
 `pip-audit` sur `requirements.lock` ne signale aucun autre avis que ceux listés ici. Cette acceptation ne vaut que pour
@@ -63,6 +63,24 @@ Sources de révision : fiches OSV
 [`PYSEC-2026-3815`](https://osv.dev/vulnerability/PYSEC-2026-3815),
 [signalement amont `chroma-core/chroma#7588`](https://github.com/chroma-core/chroma/issues/7588)
 et [avis HiddenLayer `2026-06-chromadb-5`](https://www.hiddenlayer.com/sai-security-advisory/2026-06-chromadb-5).
+
+## Alertes CodeQL classées sans correction
+
+Revue du 22 octobre 2026. Les alertes suivantes sont des faux positifs pour
+l’architecture locale de Bibliobrain ; elles peuvent être fermées dans GitHub
+(« Dismiss → False positive ») avec la justification indiquée.
+
+| Règle | Fichier | Justification |
+|---|---|---|
+| `py/path-injection` | `src/zotero_db.py` | les chemins lus sont la base Zotero, le fichier BibTeX ou l’instantané choisis par l’utilisateur ; l’API n’écoute que sur `127.0.0.1` et rejette les en-têtes `Host` et les origines non locales (`src/http_security.py`) |
+| `py/weak-sensitive-data-hashing` | `src/rag/query_engine.py` | SHA-1 sert uniquement à dériver un identifiant stable de passage, pas à protéger un secret |
+| `py/polynomial-redos` | `src/chat_export.py` (listes, nom de fichier) | expressions ancrées, testées linéaires sur des entrées hostiles |
+| `py/polynomial-redos` | `src/bug_reports.py` (chemins, documents, contenu privé) | testées linéaires sur des entrées hostiles |
+
+Les autres alertes de cette revue ont été corrigées : téléchargement PDF connecté à
+l’adresse publique validée (protection contre le DNS rebinding, `py/full-ssrf`) et
+expressions quadratiques remplacées dans `src/chat_export.py`, `src/bug_reports.py`
+et `src/citation_graph.py`, avec des tests de non-régression.
 
 ## Contrôles obligatoires avant publication
 

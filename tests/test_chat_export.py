@@ -537,3 +537,31 @@ def test_stream_chat_export_writes_bibliography_into_saved_markdown(
     assert export_event["data"]["bibliography_count"] == 1
     assert "## Bibliographie" in content
     assert "1. Dupont (2026). Pertes AC dans les aimants HTS. DOI: 10.555/hts." in content
+
+
+def test_export_title_and_fences_keep_their_results() -> None:
+    from src.chat_export import _coerce_export_title, _extract_latex_body, _strip_code_fence
+
+    assert _strip_code_fence("```markdown\n# Titre\nTexte\n```") == "# Titre\nTexte"
+    assert _strip_code_fence("```\nTexte\n```") == "Texte"
+    assert _strip_code_fence("`````") == "`````"
+    assert _coerce_export_title("", "Intro\n  #  Mon titre  \nsuite") == "Mon titre"
+    assert _coerce_export_title("", "##  Pas un titre\nTexte [1, 2].") == "## Pas un titre"
+    assert _coerce_export_title("", "Phrase citée [S1, 2]. ") == "Phrase citée"
+    assert (
+        _extract_latex_body("\\documentclass{article}\n\\BEGIN{document}\nCorps\n\\end{document}")
+        == "Corps"
+    )
+
+
+def test_export_parsing_stays_linear_on_hostile_text() -> None:
+    """CodeQL py/polynomial-redos: these inputs took minutes with the old regexes."""
+    import time
+
+    from src.chat_export import _coerce_export_title, _extract_latex_body
+
+    started = time.monotonic()
+    _coerce_export_title("", "```" + " " * 200_000)
+    _coerce_export_title("", "#" + " " * 200_000 + "x" + " " * 200_000 + "!")
+    _extract_latex_body("\\begin{document}" * 20_000)
+    assert time.monotonic() - started < 2.0

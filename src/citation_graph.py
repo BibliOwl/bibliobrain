@@ -94,7 +94,7 @@ def _paper_lookup_hints(rel_path: str, item: Any | None) -> tuple[str, str, str]
         return title, year, author
 
     stem = os.path.splitext(os.path.basename(str(rel_path or "")))[0].strip()
-    parts = [part.strip() for part in re.split(r"\s+-\s+", stem) if part.strip()]
+    parts = [part.strip() for part in re.split(r"(?<!\s)\s+-\s+", stem) if part.strip()]
     for index, part in enumerate(parts[:-1]):
         match = re.fullmatch(r"(?:19|20)\d{2}[a-z]?", part, re.IGNORECASE)
         if not match:
