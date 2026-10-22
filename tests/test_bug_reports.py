@@ -95,6 +95,22 @@ prompt: summarize the confidential document contents'''
     assert "[CONTENT OMITTED]" in cleaned
 
 
+def test_redact_text_hides_url_query_and_fragment() -> None:
+    cleaned = bug_reports.redact_text("see https://api.example.org/v1?key=abc#token-xyz now")
+
+    assert cleaned == "see https://api.example.org/v1?[QUERY_REDACTED]#[FRAGMENT_REDACTED] now"
+    assert bug_reports.redact_text("http://example.org/page") == "http://example.org/page"
+
+
+def test_redact_text_stays_linear_on_nested_urls() -> None:
+    """CodeQL py/polynomial-redos: one match per URL, never one per inner "http://"."""
+    import time
+
+    started = time.monotonic()
+    bug_reports.redact_text("http://a" * 50_000 + "?secret")
+    assert time.monotonic() - started < 2.0
+
+
 def test_bug_report_status_uses_bundled_bugsink_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BIBLIOBRAIN_BUGSINK_DSN", raising=False)
     monkeypatch.setenv("BIBLIOBRAIN_ERROR_REPORTING_ENABLED", "true")

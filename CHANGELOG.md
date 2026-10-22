@@ -18,6 +18,22 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
 
 ## [Non publié]
 
+## [0.8.2] - 2026-10-22
+
+### Corrigé
+
+- Mise à jour depuis l'application : elle refusait tout installateur avec « The selected
+  executable is not identified as a Bibliobrain installer ». Inno Setup complète le nom de
+  produit de l'exe avec des espaces, que la vérification ne retirait pas. Une installation
+  en 0.8.1 ou antérieure doit encore lancer l'installateur 0.8.2 à la main une fois.
+
+### Sécurité
+
+- Téléchargement de PDF depuis la découverte d'articles : la connexion se fait vers l'adresse
+  publique déjà vérifiée, ce qui empêche un DNS rebinding de viser une adresse locale.
+- Export du chat, rapports de bug et graphe de citations : des expressions régulières au coût
+  quadratique sur certains textes ont été remplacées par des traitements linéaires.
+
 ## [0.8.1] - 2026-10-22
 
 ### Ajouté
@@ -360,6 +376,7 @@ Première version publique.
   bande horizontale de 100 px : c'est de nouveau une liste verticale. Historique replié vers
   1100 px : ses deux boutons ne débordent plus de la barre.
 
-[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.1...HEAD
+[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bibliOwl/bibliobrain/releases/tag/v0.8.0

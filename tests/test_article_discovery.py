@@ -35,6 +35,74 @@ def test_pdf_download_rejects_loopback_target() -> None:
         _validate_public_download_url("http://127.0.0.1/private.pdf")
 
 
+def test_pdf_download_connects_to_the_validated_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second DNS answer (DNS rebinding) must not change where the download goes."""
+    import socket
+
+    import src.article_discovery as discovery
+
+    answers = iter(["93.184.216.34", "127.0.0.1"])
+
+    def rebinding_getaddrinfo(host: str, port: int, *args: Any, **kwargs: Any) -> list[Any]:
+        address = next(answers, "127.0.0.1")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    monkeypatch.setattr(discovery.socket, "getaddrinfo", rebinding_getaddrinfo)
+    seen: list[httpx.Request] = []
+
+    async def recording_send(
+        self: httpx.AsyncClient, request: httpx.Request, **_kwargs: Any
+    ) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, request=request, content=b"%PDF-1.7\n")
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", recording_send)
+
+    content = asyncio.run(discovery._download_binary("https://papers.example.org/a.pdf?x=1"))
+
+    assert content == b"%PDF-1.7\n"
+    assert len(seen) == 1
+    assert str(seen[0].url) == "https://93.184.216.34/a.pdf?x=1"
+    assert seen[0].headers["host"] == "papers.example.org"
+    assert seen[0].extensions["sni_hostname"] == "papers.example.org"
+
+
+def test_pdf_download_revalidates_each_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+    import socket
+
+    import src.article_discovery as discovery
+
+    def getaddrinfo(host: str, port: int, *args: Any, **kwargs: Any) -> list[Any]:
+        address = "10.0.0.5" if host == "intranet.example" else "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    monkeypatch.setattr(discovery.socket, "getaddrinfo", getaddrinfo)
+
+    async def redirecting_send(
+        self: httpx.AsyncClient, request: httpx.Request, **_kwargs: Any
+    ) -> httpx.Response:
+        return httpx.Response(
+            302, request=request, headers={"location": "http://intranet.example/secret.pdf"}
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", redirecting_send)
+
+    with pytest.raises(ValueError, match="locales ou privees"):
+        asyncio.run(discovery._download_binary("https://papers.example.org/a.pdf"))
+
+
+def test_pinned_download_request_keeps_port_and_brackets_ipv6() -> None:
+    from src.article_discovery import _pinned_download_request
+
+    url, headers, extensions = _pinned_download_request(
+        "http://papers.example.org:8080/a.pdf", "2606:2800:220:1::1"
+    )
+
+    assert url == "http://[2606:2800:220:1::1]:8080/a.pdf"
+    assert headers == {"Host": "papers.example.org:8080"}
+    assert extensions == {}
+
+
 def test_pdf_download_skips_zotero_connector_when_disabled(
     workspace_tmp_dir: Path,
 ) -> None:

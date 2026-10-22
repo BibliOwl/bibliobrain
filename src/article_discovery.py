@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -5932,7 +5932,12 @@ _DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 _DOWNLOAD_MAX_REDIRECTS = 5
 
 
-def _validate_public_download_url(url: str) -> None:
+def _validate_public_download_url(url: str) -> str:
+    """Check that ``url`` only reaches public addresses; return one of them.
+
+    The download then connects to that address, so a second DNS answer
+    (DNS rebinding) cannot send it to a local or private host.
+    """
     parsed = urlsplit(str(url or "").strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("URL PDF invalide: seuls HTTP et HTTPS sont autorises.")
@@ -5941,7 +5946,7 @@ def _validate_public_download_url(url: str) -> None:
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     addresses = {
-        info[4][0]
+        str(info[4][0])
         for info in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
     }
     if not addresses:
@@ -5950,6 +5955,24 @@ def _validate_public_download_url(url: str) -> None:
         ip = ipaddress.ip_address(address)
         if not ip.is_global:
             raise ValueError("URL PDF refusee: les adresses locales ou privees sont interdites.")
+    # IPv4 first: many home connections still have no IPv6 route.
+    return sorted(addresses, key=lambda address: (":" in address, address))[0]
+
+
+def _pinned_download_request(url: str, address: str) -> tuple[str, dict[str, str], dict[str, str]]:
+    """The URL, headers and extensions to fetch ``url`` from ``address`` only.
+
+    The host name stays in the Host header and in TLS (SNI and certificate
+    check), so virtual hosts and HTTPS keep working.
+    """
+    parsed = urlsplit(url)
+    hostname = parsed.hostname or ""
+    host_header = parsed.netloc.rsplit("@", 1)[-1]
+    ip_host = f"[{address}]" if ":" in address else address
+    netloc = f"{ip_host}:{parsed.port}" if parsed.port else ip_host
+    pinned_url = urlunsplit((parsed.scheme, netloc, parsed.path or "/", parsed.query, ""))
+    extensions = {"sni_hostname": hostname} if parsed.scheme == "https" else {}
+    return pinned_url, {"Host": host_header}, extensions
 
 
 async def _download_binary(url: str) -> bytes:
@@ -5958,8 +5981,11 @@ async def _download_binary(url: str) -> bytes:
     current_url = str(url or "").strip()
     async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=False) as client:
         for _redirect_count in range(_DOWNLOAD_MAX_REDIRECTS + 1):
-            await asyncio.to_thread(_validate_public_download_url, current_url)
-            async with client.stream("GET", current_url) as response:
+            address = await asyncio.to_thread(_validate_public_download_url, current_url)
+            pinned_url, pinned_headers, extensions = _pinned_download_request(current_url, address)
+            async with client.stream(
+                "GET", pinned_url, headers=pinned_headers, extensions=extensions
+            ) as response:
                 if response.is_redirect:
                     location = response.headers.get("location", "").strip()
                     if not location:

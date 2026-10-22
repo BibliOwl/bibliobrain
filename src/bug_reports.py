@@ -54,8 +54,9 @@ _JWT_RE = re.compile(
     r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\."
     r"[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])"
 )
-_URL_QUERY_RE = re.compile(r"(?i)(https?://[^\s?#]+)\?[^\s#]*")
-_URL_FRAGMENT_RE = re.compile(r"(?i)(https?://[^\s#]+)#[^\s]*")
+# One match per whole URL; matching the query and the fragment separately
+# restarts at every "http://" inside a URL and is quadratic.
+_URL_RE = re.compile(r"(?i)https?://\S+")
 _FILE_URI_RE = re.compile(r"""(?i)\bfile:///[^\r\n\s"'<>]+""")
 _QUOTED_LOCAL_PATH_RE = re.compile(
     r"""(?i)(["'])(?:[a-z]:[\\/]|\\\\|/(?:home|users|private|tmp|var/tmp)/).*?\1"""
@@ -195,6 +196,16 @@ class _RecordingTransport(HttpTransport):
         super().on_dropped_event(reason)
 
 
+def _redact_url_query_and_fragment(match: re.Match[str]) -> str:
+    url = match.group(0)
+    after_scheme = url.index("://") + 4
+    hash_at = url.find("#", after_scheme)
+    head_end = hash_at if hash_at != -1 else len(url)
+    query_at = url.find("?", after_scheme, head_end)
+    head = url[:query_at] + "?[QUERY_REDACTED]" if query_at != -1 else url[:head_end]
+    return head + ("#[FRAGMENT_REDACTED]" if hash_at != -1 else "")
+
+
 def redact_text(
     value: Any,
     *,
@@ -210,8 +221,7 @@ def redact_text(
     text = _DSN_AUTH_RE.sub(r"\1[REDACTED]@", text)
     text = _KNOWN_TOKEN_RE.sub("[REDACTED]", text)
     text = _JWT_RE.sub("[REDACTED]", text)
-    text = _URL_QUERY_RE.sub(r"\1?[QUERY_REDACTED]", text)
-    text = _URL_FRAGMENT_RE.sub(r"\1#[FRAGMENT_REDACTED]", text)
+    text = _URL_RE.sub(_redact_url_query_and_fragment, text)
     text = _FILE_URI_RE.sub("[LOCAL_PATH]", text)
     text = _QUOTED_LOCAL_PATH_RE.sub(r"\1[LOCAL_PATH]\1", text)
     text = _WINDOWS_PATH_RE.sub("[LOCAL_PATH]", text)

@@ -277,11 +277,16 @@ def safe_export_filename(
     return f"{stamp}-{slug}-{uuid.uuid4().hex[:8]}.{suffix}"
 
 
+_CODE_FENCE_LANGUAGE_RE = re.compile(r"(?:markdown|md|latex|tex)?", re.I)
+
+
 def _strip_code_fence(content: str) -> str:
     value = str(content or "").strip()
-    match = re.fullmatch(r"```(?:markdown|md|latex|tex)?\s*([\s\S]*?)```", value, flags=re.I)
-    if match:
-        return match.group(1).strip()
+    # Plain string checks: a regex over the whole body backtracks quadratically.
+    if len(value) >= 6 and value.startswith("```") and value.endswith("```"):
+        inner = value[3:-3]
+        language = _CODE_FENCE_LANGUAGE_RE.match(inner)
+        return inner[language.end() if language else 0 :].strip()
     return value
 
 
@@ -291,28 +296,35 @@ def _coerce_export_title(title: str, body: str, *, fallback: str = "Export du do
         return explicit[:120].strip() or fallback
 
     raw_body = _strip_code_fence(body)
-    heading_match = re.search(r"(?m)^\s*#\s+(.+?)\s*$", raw_body)
-    if heading_match:
-        candidate = heading_match.group(1).strip()
-        if candidate:
-            return candidate[:120].strip()
+    for raw_line in raw_body.splitlines():
+        stripped = raw_line.strip()
+        if len(stripped) > 1 and stripped[0] == "#" and stripped[1].isspace():
+            return stripped[1:].strip()[:120].strip()
 
     for raw_line in raw_body.splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
         if not line:
             continue
         line = re.sub(r"^\[[^\]]+\]\s*", "", line)
-        line = re.sub(r"\s*\[[A-Za-z]?\d+(?:,\s*[A-Za-z]?\d+)*\][\s.,;:!?-]*$", "", line).strip()
+        line = re.sub(r"(?<!\s)\s*\[[A-Za-z]?\d+(?:,\s*[A-Za-z]?\d+)*\][\s.,;:!?-]*$", "", line).strip()
         if line:
             return line[:120].rstrip(" .,:;|-") or fallback
     return fallback
 
 
+_LATEX_BEGIN_DOCUMENT_RE = re.compile(r"\\begin\{document\}", re.I)
+_LATEX_END_DOCUMENT_RE = re.compile(r"\\end\{document\}", re.I)
+
+
 def _extract_latex_body(value: str) -> str:
     text = str(value or "").strip()
-    match = re.search(r"\\begin\{document\}([\s\S]*?)\\end\{document\}", text, flags=re.I)
-    if match:
-        text = match.group(1)
+    # Two literal searches instead of one lazy regex, which is quadratic on
+    # a text full of \begin{document} without a matching \end{document}.
+    begin = _LATEX_BEGIN_DOCUMENT_RE.search(text)
+    if begin:
+        end = _LATEX_END_DOCUMENT_RE.search(text, begin.end())
+        if end:
+            text = text[begin.end() : end.start()]
     text = re.sub(r"(?m)^\s*\\maketitle\s*$", "", text)
     text = re.sub(r"(?m)^\s*\\(?:documentclass|usepackage|title|author|date)\b.*$", "", text)
     return text.strip()
