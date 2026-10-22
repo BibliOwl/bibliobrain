@@ -19,6 +19,7 @@ where none exists yet: nothing on this computer is overwritten.
 from __future__ import annotations
 
 import contextlib
+import errno
 import gc
 import hashlib
 import json
@@ -605,6 +606,14 @@ def export_active_index(
     _progress_begin("export")
     try:
         return _export_active_index(output_path, include_documents=include_documents)
+    except OSError as exc:
+        if not _is_disk_full(exc):
+            raise
+        raise IndexTransferError(
+            "disk_space",
+            "Le disque de destination est plein : rien n'a été enregistré. Choisissez un autre "
+            "emplacement (clé USB, autre disque) ou libérez de la place.",
+        ) from exc
     finally:
         _progress_end()
 
@@ -681,6 +690,15 @@ def _export_active_index(
     for path, _relative in index_files:
         with contextlib.suppress(OSError):
             total_bytes += path.stat().st_size
+    # The documents are stored as they are: their size is a floor for the file.
+    floor = check_disk_space([(str(output.parent), sum(size for *_rest, size in documents))])
+    if not floor["ok"]:
+        raise IndexTransferError(
+            "disk_space",
+            f"Espace disque insuffisant à cet emplacement : les PDF seuls demandent "
+            f"{_format_bytes(floor['required_bytes'])}, il reste {_format_bytes(floor['free_bytes'])}. "
+            "Choisissez un autre emplacement ou exportez sans les PDF (Options).",
+        )
     counter = _ByteCounter("export", total_bytes)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -881,6 +899,60 @@ def _free_bytes(location: str | os.PathLike[str] | None = None) -> int:
         return -1
 
 
+def _disk_key(location: str | os.PathLike[str]) -> Any:
+    """The device holding ``location`` (or its nearest existing parent)."""
+    candidate = Path(location)
+    while not candidate.exists() and candidate.parent != candidate:
+        candidate = candidate.parent
+    try:
+        return os.stat(candidate).st_dev
+    except OSError:
+        return str(candidate)
+
+
+def check_disk_space(needs: list[tuple[str, int]]) -> dict[str, Any]:
+    """Free space for every (location, bytes) need; needs on one disk add up.
+
+    The PDF copy and the index usually land on the same disk: checking them
+    one by one let an import fill the disk halfway through.
+    """
+    disks: dict[Any, dict[str, Any]] = {}
+    for location, required in needs:
+        if required <= 0:
+            continue
+        disk = disks.setdefault(
+            _disk_key(location),
+            {"location": str(location), "required_bytes": 0, "free_bytes": _free_bytes(location)},
+        )
+        disk["required_bytes"] += int(required)
+    listed = list(disks.values())
+    for disk in listed:
+        disk["ok"] = disk["free_bytes"] < 0 or disk["free_bytes"] >= disk["required_bytes"]
+    short = [disk for disk in listed if not disk["ok"]]
+    worst = short[0] if short else (listed[0] if listed else {"required_bytes": 0, "free_bytes": -1})
+    return {
+        "ok": not short,
+        "disks": listed,
+        # Kept for reports saved by earlier versions and their readers.
+        "required_bytes": worst["required_bytes"],
+        "free_bytes": worst["free_bytes"],
+    }
+
+
+def _import_needs(archive: dict[str, Any], copy: dict[str, Any]) -> list[tuple[str, int]]:
+    needs = [(str(_index_profiles_root()), int(archive["uncompressed_bytes"] * 1.1))]
+    if copy.get("mode") in _COPY_MODES and copy.get("copy_bytes"):
+        # A small margin for the file system's own bookkeeping.
+        needs.append((str(copy["target"]), int(copy["copy_bytes"] * 1.02)))
+    return needs
+
+
+def _is_disk_full(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and (
+        exc.errno == errno.ENOSPC or getattr(exc, "winerror", None) in {39, 112}
+    )
+
+
 # ------ Pre-import check ----------------------------------------
 
 
@@ -948,8 +1020,6 @@ def plan_document_copy(
         "set_data_path": False,
         "copy_count": 0,
         "copy_bytes": 0,
-        "free_bytes": -1,
-        "disk_ok": True,
         "rel_paths": [],
     }
     if not files:
@@ -971,10 +1041,7 @@ def plan_document_copy(
         plan["rel_paths"].append(rel_path)
         plan["copy_bytes"] += int(item["bytes"])
     plan["copy_count"] = len(plan["rel_paths"])
-    plan["free_bytes"] = _free_bytes(plan["target"])
-    # A small margin for the file system's own bookkeeping.
-    required = int(plan["copy_bytes"] * 1.02)
-    plan["disk_ok"] = plan["free_bytes"] < 0 or plan["free_bytes"] >= required
+    # Free space is checked with the index's needs: see check_disk_space.
     return plan
 
 
@@ -1156,6 +1223,20 @@ def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
 
+def _disk_space_message(disk: dict[str, Any], *, copying: bool) -> str:
+    short = [item for item in disk.get("disks") or [disk] if not item.get("ok", False)] or [disk]
+    item = short[0]
+    what = "l'index et les PDF de l'archive" if copying else "l'index"
+    free = int(item.get("free_bytes", -1))
+    where = f" sur le disque de {item['location']}" if item.get("location") else ""
+    return (
+        f"Espace disque insuffisant{where} : {what} demandent {_format_bytes(int(item['required_bytes']))}"
+        + (f", il reste {_format_bytes(free)}." if free >= 0 else ".")
+        + " Libérez de la place (le fichier importé peut aussi être placé sur un autre disque), "
+        "puis relancez la vérification."
+    )
+
+
 def _format_bytes(value: int) -> str:
     if value >= 1024**3:
         return f"{value / 1024**3:.1f} Go".replace(".", ",")
@@ -1295,13 +1376,6 @@ def finalize_report(report: dict[str, Any]) -> dict[str, Any]:
             f"dans {where} ({_format_bytes(copy['copy_bytes'])}). Aucun fichier existant n'est remplacé."
             + (" Ce dossier deviendra le dossier de vos PDF." if copy.get("set_data_path") else ""),
         ))
-        if not copy.get("disk_ok", True):
-            issues.append(_issue(
-                "error",
-                "documents_disk_space",
-                f"Espace disque insuffisant dans {where} pour copier les documents "
-                f"({_format_bytes(copy['copy_bytes'])} nécessaires).",
-            ))
     if copy.get("mode") == "zotero_other_library":
         issues.append(_issue(
             "warning",
@@ -1362,12 +1436,7 @@ def finalize_report(report: dict[str, Any]) -> dict[str, Any]:
 
     disk = report["disk"]
     if not disk["ok"]:
-        issues.append(_issue(
-            "error",
-            "disk_space",
-            "Espace disque insuffisant pour importer cet index "
-            f"({disk['required_bytes'] // (1024 * 1024)} Mo nécessaires).",
-        ))
+        issues.append(_issue("error", "disk_space", _disk_space_message(disk, copying=bool(copy.get("copy_count")))))
 
     levels = {issue["level"] for issue in issues}
     report["issues"] = issues
@@ -1387,8 +1456,6 @@ def inspect_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
         library = _records_library(archive["records"])
     copy = plan_document_copy(archive["files"], library_report)
     incoming = {rel_path: archive["files"][rel_path] for rel_path in copy["rel_paths"]}
-    required = int(archive["uncompressed_bytes"] * 1.1)
-    free = _free_bytes()
     report = {
         "archive": {
             "path": archive["path"],
@@ -1428,7 +1495,7 @@ def inspect_archive(archive_path: str | os.PathLike[str]) -> dict[str, Any]:
             if embedding["action"] == "equivalent"
             else str(index_info["embedding_model"]),
         ),
-        "disk": {"required_bytes": required, "free_bytes": free, "ok": free < 0 or free >= required},
+        "disk": check_disk_space(_import_needs(archive, copy)),
     }
     return finalize_report(report)
 
@@ -1595,6 +1662,16 @@ def import_archive(
         return _import_archive(
             archive_path, adopt_settings=adopt_settings, copy_documents=copy_documents
         )
+    except OSError as exc:
+        if not _is_disk_full(exc):
+            raise
+        # Something else filled the disk meanwhile; the index was not replaced.
+        raise IndexTransferError(
+            "disk_space",
+            "Le disque est plein : l'import s'est arrêté sans remplacer l'index. "
+            "Les PDF déjà copiés restent en place et ne seront pas recopiés. "
+            "Libérez de la place, puis relancez l'import.",
+        ) from exc
     finally:
         _progress_end()
 
@@ -1606,9 +1683,6 @@ def _import_archive(
     copy_documents: bool,
 ) -> dict[str, Any]:
     archive = _read_archive(archive_path)
-    free = _free_bytes()
-    if 0 <= free < archive["uncompressed_bytes"]:
-        raise IndexTransferError("disk_space", "Espace disque insuffisant pour importer cet index.")
     documents: dict[str, Any] = {"copied": 0, "skipped": 0, "target": "", "data_path_set": False}
     records_result: dict[str, Any] = {"used": False, "path": "", "count": 0}
     library_report: dict[str, Any] | None = None
@@ -1616,21 +1690,24 @@ def _import_archive(
     if archive["records"]:
         library_report, _library = compare_library(archive["library"])
         use_records = plan_records(archive["records"], library_report)["use"]
+    plan: dict[str, Any] = {"mode": "none", "copy_count": 0, "copy_bytes": 0}
     if copy_documents and archive["files"]:
         if library_report is None:
             library_report, _library = compare_library(archive["library"])
         plan = plan_document_copy(archive["files"], library_report)
-        if plan["mode"] in _COPY_MODES:
-            documents["target"] = plan["target"]
-            if plan["copy_count"]:
-                if not plan["disk_ok"]:
-                    raise IndexTransferError(
-                        "disk_space", "Espace disque insuffisant pour copier les documents."
-                    )
-                documents.update(_copy_documents(archive["path"], archive["files"], plan))
-            if plan["set_data_path"]:
-                _adopt_data_path(plan["target"])
-                documents["data_path_set"] = True
+    # Everything is checked before the first byte is written.
+    disk = check_disk_space(_import_needs(archive, plan))
+    if not disk["ok"]:
+        raise IndexTransferError(
+            "disk_space", _disk_space_message(disk, copying=bool(plan.get("copy_count")))
+        )
+    if plan["mode"] in _COPY_MODES:
+        documents["target"] = plan["target"]
+        if plan["copy_count"]:
+            documents.update(_copy_documents(archive["path"], archive["files"], plan))
+        if plan["set_data_path"]:
+            _adopt_data_path(plan["target"])
+            documents["data_path_set"] = True
     index_info = archive["index"]
     compatibility = embedding_compatibility(index_info)
     label = str(index_info["embedding_model"])

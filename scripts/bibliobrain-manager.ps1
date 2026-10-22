@@ -56,6 +56,9 @@ $LegacyStateDir = Join-Path $RepoRoot ".bibliobrain"
 $PidPath = Join-Path $StateDir "server.pid"
 $OllamaPidPath = Join-Path $StateDir "ollama.pid"
 $UpdateResultPath = Join-Path $StateDir "update-result.json"
+# Holds the PID of a running update: starting Bibliobrain meanwhile would run
+# a half-replaced application.
+$UpdateLockPath = Join-Path $StateDir "update-in-progress"
 # ZIP_PACKAGE_MARKER and the package root of scripts/release_tools.py.
 $ZipPackageMarker = "ZIP-PACKAGE.txt"
 $ZipPackageRoot = "Bibliobrain"
@@ -243,9 +246,43 @@ function Show-StartFailure {
     }
 }
 
+function Get-RunningUpdatePid {
+    # 0 when no update runs. A lock left by a crashed update is ignored.
+    if (-not (Test-Path -LiteralPath $UpdateLockPath -PathType Leaf)) {
+        return 0
+    }
+    $lockPid = 0
+    if (-not [int]::TryParse((Get-Content -Raw -LiteralPath $UpdateLockPath -ErrorAction SilentlyContinue).Trim(), [ref]$lockPid)) {
+        return 0
+    }
+    if ($lockPid -eq $PID) {
+        return 0
+    }
+    $process = Get-Process -Id $lockPid -ErrorAction SilentlyContinue
+    if ($process -and $process.ProcessName -match "^(powershell|pwsh)$") {
+        return $lockPid
+    }
+    return 0
+}
+
+function Enter-UpdateLock {
+    if (Get-RunningUpdatePid) {
+        throw "Another Bibliobrain update is already running. Wait for its window to close."
+    }
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+    Set-Content -LiteralPath $UpdateLockPath -Value $PID -Encoding ASCII
+}
+
+function Exit-UpdateLock {
+    Remove-Item -LiteralPath $UpdateLockPath -Force -ErrorAction SilentlyContinue
+}
+
 function Start-Bibliobrain {
     if (-not (Test-Path $PythonExe)) {
         throw "Bibliobrain is not installed. Run Install-Bibliobrain.cmd first."
+    }
+    if (Get-RunningUpdatePid) {
+        throw "Bibliobrain is being updated. Wait until the update window says it is finished, then open Bibliobrain again."
     }
 
     New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
@@ -648,7 +685,13 @@ function Write-UpdateResult {
 function Invoke-UpdateFromApp {
     $succeeded = $false
     try {
-        Update-Bibliobrain
+        Enter-UpdateLock
+        try {
+            Update-Bibliobrain
+        }
+        finally {
+            Exit-UpdateLock
+        }
         Write-UpdateResult -Ok $true
         $succeeded = $true
     }
@@ -669,6 +712,49 @@ function Invoke-UpdateFromApp {
     if (-not $succeeded) {
         # Keep the explanation on screen; on success this window just closes.
         Read-Host "Press Enter to close this window"
+    }
+}
+
+function Invoke-ManualUpdate {
+    # Update-Bibliobrain.cmd: its console closes as soon as this returns, so
+    # the end of the update must be announced where the user cannot miss it.
+    $isCheckout = Test-Path (Join-Path $RepoRoot ".git")
+    $fromZip = (-not $isCheckout) -and (Test-Path -LiteralPath (Join-Path $RepoRoot $ZipPackageMarker) -PathType Leaf)
+    if ($InstallerPath -or (-not $isCheckout -and -not $fromZip -and -not $ArchivePath)) {
+        # Setup.exe has its own finish page, whose "Launch Bibliobrain" box
+        # runs while this script still waits: no lock and no second dialog.
+        Update-Bibliobrain
+        return
+    }
+    Enter-UpdateLock
+    try {
+        Update-Bibliobrain
+    }
+    finally {
+        Exit-UpdateLock
+    }
+    $version = (Get-Content -LiteralPath (Join-Path $RepoRoot "VERSION") -Raw).Trim()
+    Write-Host ""
+    Write-Host "Bibliobrain $version is installed. You can open it now." -ForegroundColor Green
+    $openNow = $true
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+            "The update is finished: Bibliobrain $version is installed.`n`nOpen Bibliobrain now?",
+            "Bibliobrain update finished",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Information,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button1,
+            [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly
+        )
+        $openNow = $answer -eq [System.Windows.Forms.DialogResult]::Yes
+    }
+    catch {
+        $reply = Read-Host "Open Bibliobrain now? [Y/n]"
+        $openNow = $reply -notmatch "^(n|no|non)$"
+    }
+    if ($openNow) {
+        Start-Bibliobrain
     }
 }
 
@@ -1040,7 +1126,7 @@ switch ($Action) {
     "stop" { Stop-Bibliobrain }
     "repair" { Repair-Bibliobrain }
     "update" {
-        if ($FromApp) { Invoke-UpdateFromApp } else { Update-Bibliobrain }
+        if ($FromApp) { Invoke-UpdateFromApp } else { Invoke-ManualUpdate }
     }
     "backup" { Backup-Bibliobrain -Destination $BackupPath | Out-Null }
     "restore" { Restore-Bibliobrain -Source $BackupPath }
