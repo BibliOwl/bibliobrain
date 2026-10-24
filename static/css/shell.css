@@ -593,11 +593,19 @@
   overflow: hidden;
 }
 #chat-main {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* The conversation runs under the composer (like ChatGPT/Claude): the
+   composer floats over the bottom of #messages, which keeps room for it so
+   the last line can still scroll above it. chat.js sets --chat-composer-h. */
+#chat-main > #messages {
+  padding-bottom: calc(var(--chat-composer-h, 150px) + 12px);
+  scroll-padding-bottom: calc(var(--chat-composer-h, 150px) + 12px);
 }
 
 /* ---------------------------------------------
@@ -940,17 +948,25 @@
    Composer: one block, input then toolbar
    --------------------------------------------- */
 #chat-composer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
   width: 100%;
-  max-width: 840px;
-  margin: 0 auto;
-  padding: 0 40px 26px;
+  margin: 0;
+  /* Only the box hides the conversation, to the pixel: the area around it
+     is see-through and lets clicks and scrolling reach the messages. */
+  padding: 0 max(40px, calc((100% - 760px) / 2)) 26px;
   border: 0;
   border-radius: 0;
   background: transparent;
+  pointer-events: none;
   backdrop-filter: none;
   box-shadow: none;
 }
 #chat-composer:focus-within { border: 0; box-shadow: none; }
+#chat-composer > * { pointer-events: auto; }
 #chat-article-scope { margin: 0 0 8px; }
 #chat-composer-box {
   display: flex;
@@ -960,17 +976,18 @@
   border: 1px solid var(--border-2);
   border-radius: 16px;
   background: var(--surface);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  /* No shadow or glow: the text stops exactly at the frame. */
+  box-shadow: none;
+  transition: border-color 0.15s;
 }
-[data-theme="light"] #chat-composer-box { box-shadow: 0 4px 16px rgba(15,23,42,0.08); }
-#chat-composer-box:focus-within {
-  border-color: var(--accent-border);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.35), 0 0 0 3px var(--accent-soft);
-}
+#chat-composer-box:focus-within { border-color: var(--accent-border); }
 #chat-composer #msg-input {
+  /* Its own height, not the flex column's: it grows with the question. */
+  flex: 0 0 auto;
   width: 100%;
   min-height: 24px;
+  max-height: min(30vh, 240px);
+  overflow-y: hidden;
   padding: 0 4px;
   border: 0;
   background: transparent;

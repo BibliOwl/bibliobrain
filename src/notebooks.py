@@ -23,6 +23,7 @@ from src.analysis_quality import (
 )
 from src.app_settings import get_app_settings
 from src.atomic_io import atomic_write_json
+from src.chat_intents import question_may_need_visuals
 from src.file_access import resolve_pdf_path
 from src.llm_provider import (
     StreamAbortSignal,
@@ -646,6 +647,7 @@ def _stream_notebook_auto_visual_enrichment(
         or not (vision_model or visual_description_model)
         or not bool(settings.get("visual_analysis_auto_chat"))
         or _is_meta_notebook_question(message)
+        or not question_may_need_visuals(message)
     ):
         return nb
 

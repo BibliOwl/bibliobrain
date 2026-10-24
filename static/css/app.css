@@ -6585,7 +6585,7 @@ body.nb-article-viewer-open { overflow: hidden; }
   flex: 1; padding: 9px 12px; resize: none;
   background: var(--glass-1); border: 1px solid var(--border-control);
   border-radius: 10px; color: var(--text); font-size: 0.86em;
-  min-height: 40px; max-height: 110px; outline: none; line-height: 1.5;
+  min-height: 40px; max-height: min(35vh, 240px); outline: none; line-height: 1.5;
   transition: border-color 0.2s; font-family: inherit;
 }
 #nb-msg-input:focus { border-color: var(--indigo); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }

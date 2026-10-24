@@ -614,6 +614,49 @@ def test_auto_visual_failure_keeps_text_sources(
     assert any("indisponible" in event.get("msg", "") for event in events)
 
 
+
+def test_auto_visual_enrichment_skips_questions_without_visual_reference(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    monkeypatch.setattr(
+        rag.query_engine,
+        "get_app_settings",
+        lambda: {
+            "visual_analysis_mode": "on_demand",
+            "vision_model": "vision:2b",
+            "visual_analysis_auto_chat": True,
+        },
+    )
+    monkeypatch.setattr(
+        rag.query_engine,
+        "_decide_auto_visual_analysis",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a text question must not reach the figure router")
+        ),
+    )
+    docs = [
+        Document(
+            page_content="Figure 1 reports the result.",
+            metadata={"rel_path": "papers/demo.pdf", "content_type": "pdf_page"},
+        )
+    ]
+
+    generator = rag.query_engine._stream_auto_visual_enrichment(
+        "Résume la méthode de cet article.", "text:4b", docs
+    )
+    events: list[dict[str, Any]] = []
+    while True:
+        try:
+            events.append(next(generator))
+        except StopIteration as stop:
+            enriched = stop.value
+            break
+
+    assert enriched == docs
+    assert events == []
+
 def test_vector_database_status_reports_missing_current_profile_when_other_profile_exists(
     workspace_tmp_dir: Path,
     monkeypatch: Any,

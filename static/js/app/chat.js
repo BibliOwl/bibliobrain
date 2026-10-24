@@ -36,9 +36,32 @@ function handleNbKey(e) {
     sendNbMessage();
   }
 }
+// #messages keeps room under its last line for the floating composer.
+(function trackChatComposerHeight() {
+  const composer = document.getElementById('chat-composer');
+  const main = document.getElementById('chat-main');
+  if (!composer || !main || typeof ResizeObserver !== 'function') return;
+  const messages = document.getElementById('messages');
+  new ResizeObserver(() => {
+    const atBottom = messages
+      && messages.scrollHeight - messages.scrollTop - messages.clientHeight < 24;
+    main.style.setProperty('--chat-composer-h', `${Math.ceil(composer.offsetHeight)}px`);
+    // A taller composer must not cover the line being read at the bottom.
+    if (atBottom) messages.scrollTop = messages.scrollHeight;
+  }).observe(composer);
+})();
+
+// Grows with the text up to the CSS max-height, then scrolls (like ChatGPT/Claude).
 function autoResize(el) {
+  if (!el) return;
   el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 130) + 'px';
+  const style = getComputedStyle(el);
+  const borders = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
+  const max = parseFloat(style.maxHeight);
+  const wanted = el.scrollHeight + borders;
+  const limited = Number.isFinite(max) && max > 0 ? Math.min(wanted, max) : wanted;
+  el.style.height = limited + 'px';
+  el.style.overflowY = wanted > limited + 1 ? 'auto' : 'hidden';
 }
 
 // Composer menus (model chip, Options): one open at a time. Escape or a click

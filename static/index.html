@@ -88,11 +88,11 @@
   }
 </style>
 <link rel="preload" href="/static/fonts/inter-variable.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/static/css/app.css?v=20261020-composer-1">
-<link rel="stylesheet" href="/static/css/workspaces.css?v=20261008-discovery-1">
-<link rel="stylesheet" href="/static/css/settings.css?v=20261004-buttons-1">
+<link rel="stylesheet" href="/static/css/app.css?v=20261023-ui-fixes-1">
+<link rel="stylesheet" href="/static/css/workspaces.css?v=20261023-ui-fixes-1">
+<link rel="stylesheet" href="/static/css/settings.css?v=20261023-ui-fixes-1">
 <link rel="stylesheet" href="/static/css/knowledge-graph.css?v=20261004-buttons-1">
-<link rel="stylesheet" href="/static/css/shell.css?v=20261019-small-model-1">
+<link rel="stylesheet" href="/static/css/shell.css?v=20261023-ui-fixes-4">
 
 </head>
 <body>
@@ -1778,6 +1778,19 @@
         <span class="settings-status-pill" id="settings-documents-pill" role="status"></span>
       </div>
 
+      <!-- What the "to fix" pill and badge point at, with the way to fix it. -->
+      <div class="settings-section settings-card settings-needs-card" id="settings-documents-needs" data-overview-area="documents" hidden>
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <span class="settings-row-title" data-i18n="settings.docs.needsTitle">À corriger</span>
+            <span class="settings-row-desc" id="settings-documents-needs-text" role="status"></span>
+          </div>
+          <div class="settings-control">
+            <button type="button" class="btn btn-indigo settings-overview-action" id="settings-documents-needs-action" hidden></button>
+          </div>
+        </div>
+      </div>
+
       <div class="settings-section settings-card" id="settings-pdf-folder">
         <div class="settings-row">
           <div class="settings-row-info">
@@ -3189,7 +3202,7 @@
 
     <section id="startup-panel-build" class="startup-step-panel" data-startup-step="build" aria-labelledby="startup-build-heading" hidden>
       <h3 id="startup-build-heading" tabindex="-1" data-startup-step-heading data-i18n="startup.buildHeading">Préparation de vos articles</h3>
-      <p data-i18n="startup.buildHelp">Bibliobrain lit vos PDF une fois pour pouvoir répondre à vos questions. Cela peut prendre quelques minutes. Si vous fermez l’application, la préparation reprendra où elle s’est arrêtée.</p>
+      <p id="startup-build-help" data-i18n="startup.buildHelp">Bibliobrain lit vos PDF une fois pour pouvoir répondre à vos questions. Cela peut prendre quelques minutes. Si vous fermez l’application, la préparation reprendra où elle s’est arrêtée.</p>
       <p class="startup-build-folder">
         <span data-i18n="startup.folderLabel">Dossier :</span>
         <span id="startup-build-folder" data-i18n-skip></span>
@@ -3438,25 +3451,25 @@ ollama serve</pre>
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/static/js/event-bindings.js?v=20260912-cartography-legend-1"></script>
-<script src="/static/js/i18n.js?v=20261019-no-chat-model-1"></script>
+<script src="/static/js/i18n.js?v=20261023-ui-fixes-1"></script>
 <script src="/static/js/app.js?v=20261004-status-pill-1"></script>
 <script src="/static/js/app/rag.js?v=20261019-no-chat-model-1"></script>
 <script src="/static/js/app/ocr.js?v=20261004-status-pill-1"></script>
-<script src="/static/js/app/chat.js?v=20261019-no-chat-model-1"></script>
+<script src="/static/js/app/chat.js?v=20261023-ui-fixes-2"></script>
 <script src="/static/js/app/bug-reports.js?v=20260905-feature-modules-1"></script>
 <script src="/static/js/app/updates.js?v=20261008-updates-1"></script>
-<script src="/static/js/app/settings-panel.js?v=20261004-index-autoload-1"></script>
+<script src="/static/js/app/settings-panel.js?v=20261023-ui-fixes-1"></script>
 <script src="/static/js/app/library.js?v=20261016-cg-card-1"></script>
 <script src="/static/js/app/library-drop.js?v=20261010-library-drop-1"></script>
 <script src="/static/js/app/drafting.js?v=20260926-assistant-panel-2"></script>
 <script src="/static/js/app/drafting-interop.js?v=20260928-word-zotero-1"></script>
 <script src="/static/js/app/discovery.js?v=20260923-auto-index-1"></script>
-<script src="/static/js/app/workspaces.js?v=20260928-word-zotero-1"></script>
-<script src="/static/js/app/startup.js?v=20261019-no-chat-model-1"></script>
+<script src="/static/js/app/workspaces.js?v=20261023-ui-fixes-1"></script>
+<script src="/static/js/app/startup.js?v=20261023-ui-fixes-1"></script>
 <script src="/static/js/app/feature-tour.js?v=20260926-assistant-panel-2"></script>
 <script src="/static/js/app/transport.js?v=20260913-document-rag-1"></script>
 <script src="/static/js/app/assistant-rendering.js?v=20261005-sources-panel-1"></script>
-<script src="/static/js/app/notebooks.js?v=20260925-thematic-synthesis-1"></script>
+<script src="/static/js/app/notebooks.js?v=20261023-ui-fixes-5"></script>
 <script src="/static/js/app/notifications.js?v=20260912-external-api-settings-link-1"></script>
 <script src="/static/js/app/citation-graph.js?v=20260912-cartography-legend-1"></script>
 <script src="/static/js/settings.js?v=20261019-no-chat-model-1"></script>

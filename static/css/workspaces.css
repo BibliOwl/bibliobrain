@@ -111,7 +111,9 @@
 .workspace-dialog-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 14px 0; font-size: .8rem; }
 #discovery-comparison-table { overflow: auto; }
 .workspace-dialog table { border-collapse: collapse; width: 100%; table-layout: fixed; min-width: 620px; }
-.workspace-dialog th, .workspace-dialog td { border: 1px solid var(--border); padding: 14px; vertical-align: top; text-align: left; font-size: .82rem; line-height: 1.55; overflow-wrap: anywhere; }
+.workspace-dialog th, .workspace-dialog td { border: 1px solid var(--border); padding: 14px; vertical-align: top; text-align: left; font-size: .82rem; line-height: 1.55; overflow-wrap: anywhere; white-space: normal; }
+/* Long titles wrap inside their column instead of running over the next one. */
+.workspace-dialog thead th .comparison-title { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .workspace-dialog th:first-child { width: 115px; }
 .workspace-dialog th { background: var(--glass-1); text-transform: none; letter-spacing: 0; }
 .workspace-dialog th small { display: block; color: var(--muted); margin-top: 6px; }
@@ -368,12 +370,12 @@ html[data-performance-mode="light"] .drafting-selection-toolbar { background: va
 .nb-suggestions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 360px; margin-top: 10px; }
 .nb-suggestion { padding: 8px 12px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--glass-1); color: var(--text-2); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; }
 .nb-suggestion:hover { border-color: var(--accent-border); background: var(--accent-soft); color: var(--text); }
-dialog#nb-create-form { position: fixed; inset: 0; margin: auto; height: fit-content; display: none; flex-direction: column; align-items: stretch; gap: 12px; width: min(440px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--border-2); border-radius: 16px; background: var(--surface-float); color: var(--text); box-shadow: var(--shadow-3); }
+dialog#nb-create-form { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100vh - 32px); overflow: auto; display: none; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; width: min(440px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--border-2); border-radius: 16px; background: var(--surface-float); color: var(--text); box-shadow: var(--shadow-3); }
 dialog#nb-create-form[open] { display: flex; }
 dialog#nb-create-form::backdrop { background: rgba(2, 6, 23, 0.55); }
 #nb-create-title { margin: 0; font-size: 1rem; font-weight: 700; }
-.nb-create-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-.nb-create-mode { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--border-2); border-radius: 12px; background: var(--glass-1); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.nb-create-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items: stretch; gap: 8px; flex: none; }
+.nb-create-mode { display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; min-width: 0; height: auto; padding: 10px 12px; border: 1px solid var(--border-2); border-radius: 12px; background: var(--glass-1); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .nb-create-mode[hidden] { display: none; }
 .nb-create-mode span { font-size: 0.78rem; color: var(--muted); }
 .nb-create-mode.is-selected { border-color: var(--accent-border); background: var(--accent-soft); }

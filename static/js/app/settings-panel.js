@@ -373,7 +373,13 @@ function _settingsDocumentsArea() {
   }
   if (busy) return { state: 'working', text: _ti('settings.overview.docsPreparing', { count }), pill: 'settings.pill.preparing' };
   if (!(snapshot.rag?.ready || state.ragReady)) {
-    return { state: 'needs', text: _ti('settings.overview.docsNotPrepared', { count }), action: 'prepare' };
+    // Say why: after a change of AI provider the index is usually kept and
+    // only needs reloading, or must be redone for a new indexing model.
+    const indexStatus = String(snapshot.vector_db?.status || '');
+    const key = indexStatus === 'embedding_mismatch'
+      ? 'settings.overview.docsModelChanged'
+      : (indexStatus === 'present' ? 'settings.overview.docsNotLoaded' : 'settings.overview.docsNotPrepared');
+    return { state: 'needs', text: _ti(key, { count }), action: 'prepare' };
   }
   if (ocr?.view === 'working') {
     const percent = Number.isFinite(ocr.percent) ? ocr.percent : null;
@@ -447,6 +453,52 @@ function _setSettingsPill(id, state, key) {
   pill.hidden = !key;
 }
 
+// "1 thing to fix" says what it is and offers the fix right below the heading;
+// the pill itself leads there.
+function _refreshSettingsDocumentsNeeds(area) {
+  const card = document.getElementById('settings-documents-needs');
+  const pill = document.getElementById('settings-documents-pill');
+  const needs = area?.state === 'needs';
+  if (card) {
+    card.hidden = !needs;
+    const text = document.getElementById('settings-documents-needs-text');
+    if (text) text.textContent = needs ? area.text : '';
+    const action = document.getElementById('settings-documents-needs-action');
+    if (action) {
+      action.hidden = !(needs && area.action);
+      action.dataset.action = area?.action || '';
+      if (needs && area.action) action.textContent = _ti(SETTINGS_ACTION_LABELS[area.action]);
+    }
+  }
+  if (pill) {
+    pill.classList.toggle('is-actionable', needs);
+    pill.setAttribute('role', needs ? 'button' : 'status');
+    if (needs) pill.tabIndex = 0;
+    else pill.removeAttribute('tabindex');
+  }
+}
+
+function _openSettingsDocumentsNeeds() {
+  const card = document.getElementById('settings-documents-needs');
+  if (!card || card.hidden) return;
+  card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  const action = document.getElementById('settings-documents-needs-action');
+  (action && !action.hidden ? action : card).focus?.();
+  card.classList.remove('is-flash');
+  void card.offsetWidth;
+  card.classList.add('is-flash');
+}
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest?.('#settings-documents-pill.is-actionable')) _openSettingsDocumentsNeeds();
+});
+document.addEventListener('keydown', (event) => {
+  if (!['Enter', ' '].includes(event.key)) return;
+  if (!event.target.closest?.('#settings-documents-pill.is-actionable')) return;
+  event.preventDefault();
+  _openSettingsDocumentsNeeds();
+});
+
 function refreshSettingsOverview() {
   // startup.js may call this before settings.js (loaded last) defines the provider helpers.
   if (!document.getElementById('settings-overview') || typeof activeProviderMode !== 'function') return;
@@ -485,6 +537,7 @@ function refreshSettingsOverview() {
   _setSettingsPill('settings-documents-pill', documents.state, {
     needs: 'settings.pill.toFix', working: documents.pill, ok: 'settings.pill.allGood',
   }[documents.state]);
+  _refreshSettingsDocumentsNeeds(documents);
   _setSettingsPill('settings-assistant-pill', areas.assistant.state, {
     ok: 'settings.pill.working', needs: 'settings.pill.notConnected', neutral: 'settings.pill.notChecked',
   }[areas.assistant.state]);

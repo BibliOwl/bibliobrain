@@ -1638,6 +1638,22 @@
   color: var(--warning-text);
 }
 .settings-status-pill[data-state="needs"]::before { content: '!'; font-weight: 800; }
+.settings-status-pill.is-actionable { cursor: pointer; }
+.settings-status-pill.is-actionable:hover { border-color: rgba(245,158,11,0.7); }
+.settings-status-pill.is-actionable:focus-visible { outline: 2px solid var(--warning-text); outline-offset: 2px; }
+.settings-needs-card {
+  border-color: rgba(245,158,11,0.42);
+  background: rgba(245,158,11,0.06);
+}
+.settings-needs-card .settings-row-title { color: var(--warning-text); }
+.settings-needs-card.is-flash { animation: settings-needs-flash 0.9s ease-out; }
+@keyframes settings-needs-flash {
+  0% { box-shadow: 0 0 0 0 rgba(245,158,11,0.55); }
+  100% { box-shadow: 0 0 0 10px rgba(245,158,11,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-needs-card.is-flash { animation: none; }
+}
 .settings-status-pill[data-state="working"] {
   border-color: rgba(99,102,241,0.42);
   background: rgba(99,102,241,0.12);

@@ -801,6 +801,45 @@ def detect_chat_intent(message: str) -> ChatIntent:
     return ChatIntent(mode="rag", query=raw)
 
 
+# Words that point at something only an image shows. Reading figures is slow
+# (it unloads the chat model and runs a vision model on up to three pages),
+# so the chat asks the LLM whether to do it only when the question itself
+# names a visual element. Small LLMs otherwise say yes to most questions.
+_VISUAL_QUESTION_RE = re.compile(
+    r"\b(?:figures?|figs?|graphiques?|graphes?|graphs?|graphics?|courbes?|curves?|"
+    r"diagrammes?|diagrams?|schemas?|schematics?|tableaux|tableau|tables?|images?|"
+    r"illustrations?|photos?|photographies?|photographs?|charts?|plots?|plotted|"
+    r"histogrammes?|histograms?|axis|abscisses?|ordonnees?|legendes?|legends?|"
+    r"panneaux|panneau|panels?|series|nuages? de points|scatter|"
+    r"visuels?|visuelles?|visuals?|visuellement|visually)\b"
+)
+# "Fais un tableau comparatif" asks to write a table, not to read one.
+_VISUAL_OUTPUT_REQUEST_RE = re.compile(
+    r"\b(?:(?:sous forme|sous la forme) d(?:e|u|une?)?|en|as|in|into)\s+(?:un |une |a |an )?"
+    r"(?:petit |grand |court |simple |seul )?"
+    r"(?:tableaux|tableau|tables?|schemas?|diagrammes?|graphiques?|charts?|diagrams?)\b"
+    r"|\b(?:fai[st]?|faire|faites|dresse[rz]?|cree[rz]?|genere[rz]?|propose[rz]?|"
+    r"donne[rz]?|construi[st]|construire|redige[rz]?|make|create|build|draw|generate|"
+    r"produce|give)\s+(?:moi |me |nous |us )?(?:un |une |des |a |an )?"
+    r"(?:petit |grand |court |simple |seul )?"
+    r"(?:tableaux|tableau|tables?|schemas?|diagrammes?|graphiques?|charts?|diagrams?)\b"
+)
+
+
+def question_may_need_visuals(message: str) -> bool:
+    """True when the question names a figure, graph, table image or similar.
+
+    It decides only whether asking the LLM is worth it: a question that names
+    no visual element is answered from the text, and the "Read figures" button
+    still forces a reading.
+    """
+    normalized = _normalize(message)
+    if not normalized:
+        return False
+    normalized = _VISUAL_OUTPUT_REQUEST_RE.sub(" ", normalized)
+    return bool(_VISUAL_QUESTION_RE.search(normalized))
+
+
 __all__ = [
     "ChatIntent",
     "ChatMode",
@@ -814,6 +853,7 @@ __all__ = [
     "is_library_overview_request",
     "needs_llm_tool_planner",
     "paper_list_followup",
+    "question_may_need_visuals",
     "refers_to_previous_answer",
     "requests_library_citations",
     "resolve_retrieval_depth",

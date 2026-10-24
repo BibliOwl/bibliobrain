@@ -557,6 +557,36 @@ function _startupRagReady() {
   return Boolean(state.startupStatus?.rag?.ready || state.ragReady);
 }
 
+// Already set up (folder chosen, a preparation done before): the assistant
+// skips the welcome step and only reprepares, saying that nothing is lost.
+function _startupLibraryAlreadySet(snapshot = state.startupStatus) {
+  if (!isPdfFolderConfigured()) return false;
+  const settings = snapshot?.settings || {};
+  return Boolean(
+    settings.first_rag_init_done || settings.onboarding_done_v1 || Number(snapshot?.library_count) > 0,
+  );
+}
+
+function _applyStartupGuideMode() {
+  const resume = Boolean(state.startupGuideResume) && state.startupGuideStep === 'build';
+  const indexStatus = String(state.startupStatus?.vector_db?.status || '');
+  const mismatch = indexStatus === 'embedding_mismatch';
+  const texts = [
+    ['startup-help-title', resume ? 'startup.resumeTitle' : 'startup.title'],
+    ['startup-help-subtitle', resume ? 'startup.resumeSubtitle' : 'startup.subtitle'],
+    // No index at all: everything is read again, the usual text says so.
+    ['startup-build-help', resume && indexStatus !== 'missing'
+      ? (mismatch ? 'startup.resumeHelpModelChanged' : 'startup.resumeHelp')
+      : 'startup.buildHelp'],
+  ];
+  texts.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.dataset.i18n = key;
+    el.textContent = _ti(key);
+  });
+}
+
 function showStartupHelp(force = false) {
   if (!force && !isStartupGuideNeeded()) return;
   const overlay = document.getElementById('startup-help-overlay');
@@ -568,7 +598,9 @@ function showStartupHelp(force = false) {
       : null;
   }
   initStartupGuide();
-  setStartupStep(_startupGuideBuilding() ? 'build' : 'library');
+  const resume = _startupLibraryAlreadySet();
+  state.startupGuideResume = resume;
+  setStartupStep(_startupGuideBuilding() || resume ? 'build' : 'library');
   overlay.setAttribute('aria-hidden', 'false');
   overlay.classList.add('open');
   modal.classList.add('open');
@@ -784,6 +816,7 @@ function updateStartupGuideControls() {
   const buildDone = _startupRagReady() && !building && !checking && !state.startupGuideLibraryChanged;
 
   if (kicker) {
+    kicker.hidden = Boolean(state.startupGuideResume) && step === 'build';
     kicker.textContent = _ti('startup.stepCounter', {
       current: step === 'build' ? 2 : 1,
       total: STARTUP_GUIDE_STEPS.length,
@@ -844,6 +877,9 @@ function _startupProgressMessage(percent) {
 function setStartupStep(stepName, { focusHeading = false } = {}) {
   const step = STARTUP_GUIDE_STEPS.includes(stepName) ? stepName : 'library';
   state.startupGuideStep = step;
+  // Choosing another folder is a real setup again: the usual two steps.
+  if (step === 'library') state.startupGuideResume = false;
+  _applyStartupGuideMode();
   document.querySelectorAll('[data-startup-step]').forEach((panel) => {
     const active = panel.getAttribute('data-startup-step') === step;
     panel.classList.toggle('active', active);

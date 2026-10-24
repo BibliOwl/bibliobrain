@@ -65,6 +65,10 @@ function _renderNbCards(list) {
 
 function showNbCreateForm() {
   const dialog = document.getElementById('nb-create-form');
+  // The dialog sits in the notebook list, which is hidden while a notebook
+  // is open: opened there it is modal but invisible, and the whole page
+  // stops responding. It lives in <body> instead.
+  if (dialog && dialog.parentElement !== document.body) document.body.appendChild(dialog);
   if (dialog && !dialog.open) dialog.showModal();
   onNbCreateModeChange();
   setTimeout(() => document.getElementById('nb-new-title').focus(), 50);

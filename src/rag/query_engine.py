@@ -31,6 +31,7 @@ from src.chat_grounding import check_answer_grounding
 from src.chat_intents import (
     is_library_overview_request,
     is_multi_paper_comparison_request,
+    question_may_need_visuals,
     refers_to_previous_answer,
 )
 from src.chat_output_guard import ChatGuardReport, strip_invalid_citations, validate_chat_output
@@ -3336,6 +3337,9 @@ def _stream_auto_visual_enrichment(
         yield {"type": "status", "msg": _t("visual_unavailable")}
         return docs
     if not force_visual_analysis and not automatic:
+        return docs
+    # A question that names no figure, graph or table is answered from the text.
+    if not force_visual_analysis and not question_may_need_visuals(question):
         return docs
     candidates = _build_auto_visual_candidates(
         docs,

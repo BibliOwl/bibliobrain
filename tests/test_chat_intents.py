@@ -11,6 +11,7 @@ from src.chat_intents import (
     is_multi_paper_comparison_request,
     needs_llm_tool_planner,
     paper_list_followup,
+    question_may_need_visuals,
     requests_library_citations,
     resolve_retrieval_depth,
 )
@@ -428,3 +429,30 @@ def test_paper_list_followup_needs_a_previous_list_and_no_new_topic() -> None:
     assert paper_list_followup("tu peux tout résumer ?", listed) is None
     assert paper_list_followup("seulement ceux de 2024 sur le quench ?", listed) is None
     assert paper_list_followup("only the review papers?", listed) is None
+
+
+@pytest.mark.parametrize("message", [
+    "Que montre la courbe de la figure 2 ?",
+    "Quelles valeurs montre la courbe ?",
+    "Que contient le tableau 3 ?",
+    "Compare la fig. 4 et le texte.",
+    "What value does the red series reach?",
+    "What does Table 2 report?",
+    "Lis le graphique de l'article.",
+])
+def test_question_may_need_visuals_for_figure_questions(message: str) -> None:
+    assert question_may_need_visuals(message) is True
+
+
+@pytest.mark.parametrize("message", [
+    "Résume cet article.",
+    "Quels sont les auteurs ?",
+    "Quel est le courant critique à 77 K ?",
+    "Quels axes de recherche ressortent de ma bibliothèque ?",
+    "Fais un tableau comparatif des méthodes.",
+    "Présente les résultats sous forme de tableau.",
+    "Make a table of the results.",
+    "",
+])
+def test_question_may_need_visuals_skips_text_questions(message: str) -> None:
+    assert question_may_need_visuals(message) is False

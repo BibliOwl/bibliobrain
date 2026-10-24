@@ -18,6 +18,38 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
 
 ## [Non publié]
 
+## [0.8.3] - 2026-10-24
+
+### Corrigé
+
+- Chat : la zone de saisie restait sur une ligne avec une longue question. Elle grandit
+  maintenant avec le texte, puis défile au-delà d'environ 30 % de la hauteur de l'écran.
+- Paramètres › Mes documents : le badge « 1 point à corriger » ne disait pas quoi corriger
+  et cliquer dessus ne faisait rien. Le point s'affiche sous le titre, avec son bouton
+  (« Préparer »…), et le badge y mène. Le texte précise si l'index est seulement à recharger
+  ou si le modèle d'indexation a changé.
+- Assistant de préparation : quand le dossier des PDF est déjà configuré (par exemple après
+  un changement de fournisseur d'IA), il ne réaffiche plus l'écran de bienvenue ni la
+  question « Où sont vos PDF ? ». Il va directement à la préparation et indique que le
+  dossier et les réglages sont conservés.
+- Chat : la conversation défile maintenant derrière la zone de saisie, qui flotte au-dessus
+  (comme ChatGPT ou Claude), au lieu d'être coupée net au-dessus d'elle.
+- Découverte › Comparer : les titres longs des articles débordaient sur les colonnes
+  voisines du tableau.
+- Nouveau carnet : avec Zotero, les deux cartes de choix étaient étirées en hauteur.
+- Nouveau carnet : depuis un carnet ouvert, la fenêtre de création restait invisible et
+  bloquait toute l'interface.
+- Chat et carnets : la lecture automatique des figures ne se lance plus pour une question
+  qui ne parle d'aucune figure, d'aucun graphique ni d'aucun tableau. Avant, le LLM était
+  consulté à chaque question et les petits modèles demandaient souvent une lecture inutile,
+  qui décharge le modèle du chat et ralentit la réponse. Le bouton « Lire les figures »
+  force toujours la lecture.
+
+### Sécurité
+
+- filelock passe en 4.2.4 (trois failles corrigées), OpenTelemetry en 1.45.1 et setuptools
+  en 84.2.1. filelock protège le cache des modèles Hugging Face.
+
 ## [0.8.2] - 2026-10-22
 
 ### Corrigé
@@ -376,7 +408,8 @@ Première version publique.
   bande horizontale de 100 px : c'est de nouveau une liste verticale. Historique replié vers
   1100 px : ses deux boutons ne débordent plus de la barre.
 
-[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.2...HEAD
+[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bibliOwl/bibliobrain/releases/tag/v0.8.0
