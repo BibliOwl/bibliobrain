@@ -5,7 +5,22 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 import src.config as config
+
+
+@pytest.fixture(autouse=True)
+def _restore_app_settings_storage():
+    """Put STORAGE_DIR and the settings module back after each test.
+
+    The tests below point them at a temporary folder that is deleted at the
+    end; later tests then failed on that missing folder.
+    """
+    original = config.STORAGE_DIR
+    yield
+    config.STORAGE_DIR = original
+    importlib.reload(importlib.import_module("src.app_settings"))
 
 
 def _load_app_settings_module(storage_dir: Path) -> Any:
@@ -307,3 +322,15 @@ def test_app_settings_reports_a_chosen_pdf_folder_as_set(
     payload = app_settings.set_app_settings(data_path=str(workspace_tmp_dir / "articles"))
 
     assert payload["data_path_configured"] is True
+
+
+def test_standalone_pdfs_are_indexed_unless_the_user_opts_out(
+    monkeypatch: Any, workspace_tmp_dir: Path
+) -> None:
+    from src import app_settings
+
+    monkeypatch.setattr(app_settings, "_app_settings_path", lambda: workspace_tmp_dir / "s.json")
+    assert app_settings.get_app_settings()["index_standalone_pdfs"] is True
+    assert app_settings.index_standalone_pdfs_enabled() is True
+    app_settings.set_app_settings(index_standalone_pdfs=False)
+    assert app_settings.index_standalone_pdfs_enabled() is False

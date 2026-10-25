@@ -3,6 +3,7 @@
 Static files are cached by browsers for an hour (``CacheControlStaticFiles``).
 Instead of bumping ``?v=`` strings by hand, the served index.html carries a
 short hash of each referenced file, so a changed file always gets a new URL.
+The source index.html writes ``?v=auto`` everywhere; a test keeps it that way.
 """
 
 import functools

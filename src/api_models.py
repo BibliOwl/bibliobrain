@@ -81,6 +81,7 @@ class AppSettingsRequest(BaseModel):
     research_scope_enabled: bool | None = None
     discovery_query_planner: bool | None = None
     discovery_dense_enabled: bool | None = None
+    index_standalone_pdfs: bool | None = None
     discovery_candidate_multiplier: int | None = Field(default=None, ge=1, le=8)
     discovery_llm_validation_multiplier: int | None = Field(default=None, ge=1, le=8)
     unpaywall_email: str | None = None
@@ -241,6 +242,15 @@ class AnalysisPromptRequest(BaseModel):
 class LibraryExportRequest(BaseModel):
     export_format: Literal["markdown", "bibtex"] = "markdown"
     paths: list[str] | None = None
+
+class LibraryMatchPaper(BaseModel):
+    title: str = Field(default="", max_length=1000)
+    doi: str = Field(default="", max_length=300)
+
+
+class LibraryMatchRequest(BaseModel):
+    papers: list[LibraryMatchPaper] = Field(default_factory=list, max_length=200)
+
 
 class RagExclusionRequest(BaseModel):
     paths: list[str] = Field(..., min_length=1, max_length=10000)

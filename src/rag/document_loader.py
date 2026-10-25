@@ -217,13 +217,15 @@ def _load_and_chunk_single_pdf(
     chunk_size: int,
     *,
     textless_paths: set[str] | None = None,
+    failed_paths: dict[str, str] | None = None,
 ) -> tuple[list[Document], list[Document], int]:
     state._wait_while_vector_load_suspended()
     if state._vector_load_pause_event.is_set():
         return [], [], 0
     try:
         units = load_document_units(full_path, pdf_loader_class=PyPDFLoader)
-    except (OSError, ValueError, DocumentFormatError):
+    except (OSError, ValueError, DocumentFormatError) as exc:
+        _record_read_failure(rel_path, exc, failed_paths)
         return [], [], 0
 
     if state._vector_load_pause_event.is_set():
@@ -352,12 +354,23 @@ def _load_and_chunk_single_pdf(
     return note_chunks, pdf_chunks, len(prepared_pages)
 
 
+def _record_read_failure(
+    rel_path: str, exc: BaseException, failed_paths: dict[str, str] | None
+) -> None:
+    """Log a file that could not be read and keep its reason for the manifest."""
+    reason = f"{type(exc).__name__}: {exc}".strip()[:300]
+    _logger.warning("Could not read %s for indexing: %s", rel_path, reason)
+    if failed_paths is not None:
+        failed_paths[rel_path] = reason
+
+
 def _load_or_prepare_single_pdf(
     rel_path: str,
     full_path: str,
     chunk_size: int,
     *,
     textless_paths: set[str] | None = None,
+    failed_paths: dict[str, str] | None = None,
 ) -> tuple[list[Document], list[Document], int]:
     state._wait_while_vector_load_suspended()
     if state._vector_load_pause_event.is_set():
@@ -430,7 +443,11 @@ def _load_or_prepare_single_pdf(
             return note_chunks, pdf_chunks, _prepared_article_page_count(cached_article)
 
     return _load_and_chunk_single_pdf(
-        rel_path, full_path, chunk_size, textless_paths=textless_paths
+        rel_path,
+        full_path,
+        chunk_size,
+        textless_paths=textless_paths,
+        failed_paths=failed_paths,
     )
 
 
@@ -442,8 +459,10 @@ def _build_chunks_from_pdfs(
     progress_end: float,
     status_label: str = "Lecture PDF",
     textless_paths: set[str] | None = None,
+    failed_paths: dict[str, str] | None = None,
 ) -> tuple[list[Document], list[Document], int]:
-    """``textless_paths`` receives the files read without error that gave no chunk."""
+    """``textless_paths`` receives the files read without error that gave no chunk,
+    ``failed_paths`` the files that could not be read, with the reason."""
     if not pdf_list:
         return [], [], 0
 
@@ -461,7 +480,11 @@ def _build_chunks_from_pdfs(
         desc=f"{status_label}: demarrage parallel ({workers} workers) - {total} documents",
     )
 
-    load_kwargs = {} if textless_paths is None else {"textless_paths": textless_paths}
+    load_kwargs: dict[str, Any] = {}
+    if textless_paths is not None:
+        load_kwargs["textless_paths"] = textless_paths
+    if failed_paths is not None:
+        load_kwargs["failed_paths"] = failed_paths
     executor = ThreadPoolExecutor(max_workers=workers)
     futures = {
         executor.submit(
@@ -483,7 +506,7 @@ def _build_chunks_from_pdfs(
                 continue
 
             for future in done:
-                _rel_path, full_path = futures[future]
+                rel_path, full_path = futures[future]
                 completed += 1
                 frac = progress_start + min(1.0, completed / total) * span
                 progress(
@@ -496,6 +519,7 @@ def _build_chunks_from_pdfs(
                         "Recovered from an error in _build_chunks_from_pdfs.", exc_info=True
                     )
                     load_errors.append(f"{os.path.basename(full_path)}: {exc}")
+                    _record_read_failure(rel_path, exc, failed_paths)
                     continue
 
                 if note_part:
@@ -506,7 +530,9 @@ def _build_chunks_from_pdfs(
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
-    if load_errors and not note_chunks and not pdf_chunks:
+    # Without a place to record failures, a batch where nothing could be read
+    # stops the load. With one, the failures are kept per file instead.
+    if load_errors and not note_chunks and not pdf_chunks and failed_paths is None:
         joined = "; ".join(load_errors[:3])
         raise RuntimeError(f"Echec du chargement des documents pour le lot en cours: {joined}")
 

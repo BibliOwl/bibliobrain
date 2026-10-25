@@ -19,6 +19,7 @@ from typing import Any
 
 from src import config
 from src.app_settings import get_app_settings
+from src.atomic_io import atomic_write_json
 from src.document_guard import DocumentRejected, check_document
 from src.llm_provider import (
     _ollama_headers,
@@ -330,10 +331,7 @@ def _write_vision_probe_result(key: str, sees: bool) -> None:
     cached = _read_vision_probe_cache()
     cached[key] = sees
     try:
-        (_cache_dir() / _VISION_PROBE_FILENAME).write_text(
-            json.dumps(cached, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(_cache_dir() / _VISION_PROBE_FILENAME, cached)
     except OSError:
         pass
 
@@ -1535,7 +1533,7 @@ def analyze_pdf_visuals(
     }
     if not errors:
         try:
-            cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            atomic_write_json(cache_path, payload)
         except OSError:
             pass
     return payload

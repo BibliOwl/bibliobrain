@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from src.zotero_db import (
     ZoteroItem,
@@ -307,3 +308,39 @@ def test_load_zotero_library_indexes_only_the_standalone_pdfs_dropped_into_bibli
     assert filter_active_zotero_pdf_entries(
         entries, library, data_path=str(storage), zotero_db_path=str(db_path)
     ) == [entries[0]]
+    # With the option on, every standalone PDF still in the library is indexed.
+    everything = load_zotero_library(str(db_path), frozenset(), True)
+    other = lookup_zotero_item("OTHER001/other.pdf", everything)
+    assert other is not None and other.title == "other"
+    assert lookup_zotero_item("DROPPED1/Audit UI-UX.pdf", everything) is not None
+    assert lookup_zotero_item("TRASHED1/trashed.pdf", everything) is None
+    assert lookup_zotero_item("ATTACH1/active.pdf", everything) is not None
+
+
+def test_load_zotero_library_reads_a_copy_when_zotero_is_writing(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    # Read as immutable, the live database can show half-written pages while
+    # Zotero syncs: the read is retried once from a copy.
+    from src import zotero_db
+
+    db_path = workspace_tmp_dir / "zotero.sqlite"
+    _create_minimal_zotero_sqlite(db_path)
+    real_open = zotero_db._open_db
+    opened: list[str] = []
+
+    def flaky_open(path: str) -> sqlite3.Connection:
+        opened.append(path)
+        if len(opened) == 1:
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        return real_open(path)
+
+    monkeypatch.setattr(zotero_db, "_open_db", flaky_open)
+    monkeypatch.setattr(zotero_db, "_ZOTERO_RETRY_DELAY_SECONDS", 0)
+    load_zotero_library.cache_clear()
+
+    library = load_zotero_library(str(db_path))
+
+    assert len(opened) == 2 and opened[1] != str(db_path)
+    attached = lookup_zotero_item("ATTACH1/active.pdf", library)
+    assert attached is not None and attached.item_key == "PARENT1"

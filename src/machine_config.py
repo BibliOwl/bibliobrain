@@ -97,6 +97,8 @@ INTERNAL_ENVIRONMENT_NAMES = frozenset(
         "BIBLIOBRAIN_MAX_DOCUMENT_MB",
         "BIBLIOBRAIN_PARSER_MEMORY_MB",
         "BIBLIOBRAIN_PARSER_TIMEOUT_SECONDS",
+        # Set by src.managed_server for the port the manager picked.
+        "BIBLIOBRAIN_PORT",
         # A diagnostic override for one process only. Persisted, it would outlive
         # every update: the .env template of 0.6.x shipped BIBLIOBRAIN_VERSION=0.6.x,
         # and a configuration.json that still holds it from an earlier migration
@@ -189,7 +191,66 @@ def activate_machine_settings(
     """
     target = Path(path) if path is not None else configuration_path()
     settings = load_machine_settings(target)
+    settings = _absolutize_relative_paths(settings, target)
     for name, value in settings.items():
         if not str(os.environ.get(name) or "").strip():
             os.environ[name] = value
     return target.resolve() if target.exists() else None
+
+
+# Folder and file settings. The old .env held relative paths such as
+# "./chroma_db_zotero", relative to the application folder it lived in.
+PATH_SETTING_NAMES = frozenset(
+    {"BIBLIOBRAIN_HOME", "DATA_PATH", "STORAGE_DIR", "CHROMA_PATH", "ZOTERO_DB_PATH"}
+)
+def application_root(code_root: Path | None = None) -> Path:
+    """The folder relative path settings are read from.
+
+    The code folder, except in a git worktree (a branch being tested): there
+    it is the main checkout, where the .env and the index of the user live.
+    """
+    root = code_root or Path(__file__).resolve().parents[1]
+    marker = root / ".git"
+    if not marker.is_file():
+        return root
+    try:
+        text = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return root
+    if not text.startswith("gitdir:"):
+        return root
+    gitdir = Path(text[len("gitdir:") :].strip())
+    if not gitdir.is_absolute():
+        gitdir = (root / gitdir).resolve()
+    # <main checkout>/.git/worktrees/<name>
+    if gitdir.parent.name == "worktrees" and gitdir.parent.parent.name == ".git":
+        return gitdir.parent.parent.parent
+    return root
+
+
+_APP_ROOT = application_root()
+
+
+def _absolutize_relative_paths(settings: dict[str, str], target: Path) -> dict[str, str]:
+    """Read relative path settings from the application folder, and save them
+    absolute once they point at something that exists.
+
+    Saved absolute, the same index is found from any folder the app starts
+    from, including a branch worktree, instead of a new empty one there.
+    """
+    resolved = dict(settings)
+    to_save: dict[str, str] = {}
+    for name in PATH_SETTING_NAMES & set(settings):
+        value = os.path.expandvars(os.path.expanduser(settings[name]))
+        if os.path.isabs(value):
+            continue
+        absolute = str((_APP_ROOT / value).resolve())
+        resolved[name] = absolute
+        if os.path.exists(absolute):
+            to_save[name] = absolute
+    if to_save:
+        try:
+            save_machine_settings(to_save, path=target)
+        except (OSError, MachineConfigError):
+            pass
+    return resolved

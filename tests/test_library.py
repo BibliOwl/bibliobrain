@@ -10,7 +10,15 @@ from src.zotero_db import ZoteroItem
 
 
 def test_get_cached_summary_cleans_legacy_empty_response_note(monkeypatch) -> None:
-    monkeypatch.setattr(library.os.path, "exists", lambda _path: True)
+    # Only the PDF is faked: os.path is shared, and a global "everything exists"
+    # broke os.makedirs for the settings file after a settings test.
+    real_exists = os.path.exists
+    monkeypatch.setattr(
+        library.os.path,
+        "exists",
+        lambda path: str(path).replace("\\", "/").endswith("papers/a.pdf") or real_exists(path),
+    )
+    monkeypatch.setattr(library, "get_app_settings", lambda: {})
     monkeypatch.setattr(library, "_analysis_fingerprint", lambda _path: "fp")
     monkeypatch.setattr(
         library,
@@ -333,7 +341,7 @@ def test_index_reload_shows_pdf_zotero_gained_since_startup_in_library_tab(
         loaded = {"oldkey01": old_item, "newkey01": new_item}
         load_calls: list[str] = []
 
-        def fake_load(path, _fingerprints):
+        def fake_load(path, _fingerprints, _include_standalone=False):
             load_calls.append(path)
             return loaded
 

@@ -1027,22 +1027,6 @@ function hideDiscoveryResult(index) {
   if (item) item._hidden = true;
 }
 
-// Papers found online go into a notebook as text sources: title, authors,
-// links and abstract (never the full text, which is not downloaded).
-function _discoveryNotebookSourceText(item) {
-  const lines = [String(item.title || _tr('Sans titre'))];
-  const meta = [item.authors_line, item.year, item.venue].filter(Boolean).join(' · ');
-  if (meta) lines.push(meta);
-  const doi = String(item.doi || '').trim();
-  if (doi) lines.push(`DOI : https://doi.org/${doi}`);
-  const page = _discoveryPageUrl(item);
-  if (page && !(doi && page.includes(doi))) lines.push(page);
-  const abstract = String(item.abstract || item.abstract_preview || '').trim();
-  if (abstract) lines.push('', abstract);
-  lines.push('', _ti('discovery.sourceAbstractOnly'));
-  return lines.join('\n');
-}
-
 function _discoveryNotebookSourceTitle(item) {
   const lead = String(item.authors_line || '').split(/[;,]/)[0].trim();
   const year = item.year ? ` (${item.year})` : '';
@@ -1080,41 +1064,159 @@ async function openNotebookPickerForItems(items, onAdded = null) {
   if (!items.length) return;
   const dialog = _discoveryNotebookDialog();
   const list = dialog.querySelector('#discovery-notebook-dialog-list');
-  dialog.querySelector('#discovery-notebook-dialog-title').textContent = _ti('discovery.pickNotebook', { count: items.length });
+  const titleEl = dialog.querySelector('#discovery-notebook-dialog-title');
+  titleEl.textContent = _ti('discovery.pickNotebook', { count: items.length });
   dialog.querySelector('[data-discovery-dialog-cancel]').textContent = _ti('notebooks.cancel');
-  list.innerHTML = `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('drafting.notebookLoading'))}</p>`;
+  list.innerHTML = `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('discovery.checkingLibrary'))}</p>`;
   if (!dialog.open) dialog.showModal();
-  let notebooks = [];
-  try {
-    const response = await fetch('/api/notebooks', { cache: 'no-store' });
-    const payload = await response.json();
-    notebooks = Array.isArray(payload?.notebooks) ? payload.notebooks : [];
-  } catch (_) { notebooks = []; }
-  if (!notebooks.length) {
-    list.innerHTML = `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('discovery.noNotebook'))}</p>`;
+  const [paths, notebooks] = await Promise.all([
+    _discoveryLibraryPaths(items),
+    fetch('/api/notebooks', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload) => (Array.isArray(payload?.notebooks) ? payload.notebooks : []))
+      .catch(() => []),
+  ]);
+  if (!paths) {
+    list.innerHTML = `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('discovery.libraryCheckFailed'))}</p>`;
     return;
   }
-  list.innerHTML = notebooks.map((notebook) => `
-    <button type="button" class="discovery-notebook-choice" ${bindBbHandler('click', function() {
-      void _addDiscoveryItemsToNotebook(items, notebook).then((count) => {
-        if (count && onAdded) onAdded(notebook, count);
-      });
-    })}>
+  // A notebook only holds papers of the library: the chat reads their PDF.
+  const entries = items.map((item, index) => ({ item, path: paths[index] || '' }));
+  const inLibrary = entries.filter((entry) => entry.path);
+  const missing = entries.filter((entry) => !entry.path).map((entry) => entry.item);
+  const missingHtml = missing.length ? _discoveryMissingPapersHtml(missing, inLibrary.length) : '';
+  if (!inLibrary.length) {
+    titleEl.textContent = _ti('discovery.noneInLibraryTitle', { count: items.length });
+    list.innerHTML = missingHtml;
+    return;
+  }
+  titleEl.textContent = _ti('discovery.pickNotebook', { count: inLibrary.length });
+  const addTo = (notebook) => {
+    void _addDiscoveryItemsToNotebook(inLibrary, notebook).then((count) => {
+      if (count && onAdded) onAdded(notebook, count);
+    });
+  };
+  const choices = notebooks.map((notebook) => `
+    <button type="button" class="discovery-notebook-choice" ${bindBbHandler('click', function() { addTo(notebook); })}>
       <strong>${escapeHtml(notebook.title || _tr('Sans titre'))}</strong>
       <span>${escapeHtml(_ti('notebooks.sourceCount', { count: Number(notebook.source_count) || 0 }))}</span>
     </button>`).join('');
+  list.innerHTML = `
+    ${missingHtml}
+    ${notebooks.length ? '' : `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('discovery.noNotebookYet'))}</p>`}
+    ${_discoveryNewNotebookFormHtml(inLibrary, addTo, { open: !notebooks.length })}
+    ${choices}`;
+  if (!notebooks.length) window.setTimeout(() => list.querySelector('.discovery-notebook-new-title')?.focus(), 40);
 }
 
-async function _addDiscoveryItemsToNotebook(items, notebook) {
+// Papers that are not in the library: listed with their publisher page, so the
+// user can fetch the PDF and add it to the library first.
+function _discoveryMissingPapersHtml(missing, addedCount) {
+  const intro = addedCount
+    ? _ti('discovery.someNotInLibrary', { count: missing.length })
+    : _ti('discovery.noneInLibrary');
+  const rows = missing.map((item) => {
+    const url = _discoveryPageUrl(item) || String(item.open_access_pdf || '');
+    const link = url
+      ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(_ti('discovery.viewAtPublisher'))}</a>`
+      : '';
+    return `<li><span>${escapeHtml(item.title || _tr('Sans titre'))}</span>${link}</li>`;
+  }).join('');
+  return `<div class="discovery-notebook-missing"><p>${escapeHtml(intro)}</p><ul>${rows}</ul></div>`;
+}
+
+// The library PDF of each paper (DOI first, then title), '' when absent;
+// null when the library cannot be checked. Also used by the citation graph.
+async function _discoveryLibraryPaths(items) {
+  try {
+    const response = await fetch('/api/library/match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ papers: items.map((item) => ({ title: String(item?.title || ''), doi: String(item?.doi || '') })) }),
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const matches = Array.isArray(payload?.matches) ? payload.matches : [];
+    return items.map((_item, index) => String(matches[index]?.rel_path || ''));
+  } catch (_) {
+    return null;
+  }
+}
+
+// Suggested title: the Discovery query when the papers come from a search.
+function _discoveryNewNotebookDefaultTitle() {
+  const query = String(document.getElementById('discovery-input')?.value || '').trim();
+  return query.length > 80 ? `${query.slice(0, 79)}…` : query;
+}
+
+function _discoveryNewNotebookFormHtml(items, addTo, { open = false } = {}) {
+  const create = async (form) => {
+    const input = form.querySelector('.discovery-notebook-new-title');
+    const button = form.querySelector('button[type="submit"]');
+    const title = String(input?.value || '').trim() || _ti('notebooks.newNotebook');
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch('/api/notebooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.id) throw new Error(payload?.detail || '');
+      addTo({ id: payload.id, title: payload.title || title, source_count: 0 });
+      window.dispatchEvent(new CustomEvent('bibliobrain:milestone', { detail: { name: 'notebook-created' } }));
+      if (typeof loadNotebooks === 'function') void loadNotebooks();
+    } catch (_) {
+      showToast(_ti('discovery.createNotebookFailed'), 4000, 'error');
+      if (button) button.disabled = false;
+    }
+  };
+  const reveal = (toggle) => {
+    const form = toggle.parentElement?.querySelector('.discovery-notebook-new-form');
+    if (!form) return;
+    toggle.hidden = true;
+    form.hidden = false;
+    form.querySelector('.discovery-notebook-new-title')?.focus();
+  };
+  return `
+    <div class="discovery-notebook-new">
+      <button type="button" class="discovery-notebook-choice discovery-notebook-new-toggle" ${open ? 'hidden' : ''}
+              ${bindBbHandler('click', function() { reveal(this); })}>
+        <strong>+ ${escapeHtml(_ti('notebooks.newNotebook'))}</strong>
+        <span>${escapeHtml(_ti('discovery.newNotebookHint', { count: items.length }))}</span>
+      </button>
+      <form class="discovery-notebook-new-form" ${open ? '' : 'hidden'}
+            ${bindBbHandler('submit', function(event) { event.preventDefault(); void create(this); })}>
+        <input type="text" class="discovery-notebook-new-title" maxlength="200"
+               value="${escapeAttr(_discoveryNewNotebookDefaultTitle())}"
+               placeholder="${escapeAttr(_ti('notebooks.newNotebook'))}"
+               aria-label="${escapeAttr(_ti('discovery.newNotebookTitleAria'))}">
+        <button type="submit" class="btn btn-primary">${escapeHtml(_ti('discovery.createAndAdd'))}</button>
+      </form>
+    </div>`;
+}
+
+// The notebook source of a library paper: its PDF text, which the chat reads.
+async function _discoveryNotebookSourceBody(item, path) {
+  const response = await fetch('/api/extract-pdf-text?path=' + encodeURIComponent(path));
+  const payload = await response.json().catch(() => ({}));
+  const text = String(payload?.text || '').trim();
+  if (!response.ok || !text) return null;
+  return { title: _discoveryNotebookSourceTitle(item), content: text, source_path: path };
+}
+
+async function _addDiscoveryItemsToNotebook(entries, notebook) {
   const dialog = document.getElementById('discovery-notebook-dialog');
   dialog?.close();
   let added = 0;
-  for (const item of items) {
+  for (const { item, path } of entries) {
     try {
+      const body = await _discoveryNotebookSourceBody(item, path);
+      if (!body) continue;
       const response = await fetch(`/api/notebooks/${encodeURIComponent(notebook.id)}/sources`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: _discoveryNotebookSourceTitle(item), content: _discoveryNotebookSourceText(item) }),
+        body: JSON.stringify(body),
       });
       if (response.ok) added += 1;
     } catch (_) { /* counted as not added */ }

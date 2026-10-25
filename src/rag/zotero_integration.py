@@ -12,7 +12,7 @@ from typing import Any
 from langchain_core.documents import Document
 
 from src import config, zotero_drops
-from src.app_settings import get_app_settings
+from src.app_settings import get_app_settings, index_standalone_pdfs_enabled
 from src.unicode_utils import json_dumps_utf8, sanitize_utf8_data, sanitize_utf8_text
 from src.zotero_db import (
     ZoteroItem,
@@ -276,7 +276,7 @@ def _refresh_zotero_library_cache() -> None:
     if zotero_db_path and os.path.exists(zotero_db_path):
         try:
             load_zotero_library.cache_clear()
-            loaded = load_zotero_library(zotero_db_path, zotero_drops.fingerprints())
+            loaded = load_zotero_library(zotero_db_path, zotero_drops.fingerprints(), index_standalone_pdfs_enabled())
             with state._state_lock:
                 state._zotero_library = loaded
             _share_with_library_tab(zotero_db_path, loaded)

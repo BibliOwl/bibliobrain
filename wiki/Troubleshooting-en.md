@@ -5,7 +5,7 @@ English · [Français](Depannage.md) · [Guide home](Home-en.md)
 ## The app does not open
 
 - Double-click the shortcut again and wait up to a minute.
-- Try `http://localhost:7860` in your browser.
+- Try `http://localhost:7860` in your browser. When another program (Gradio, Stable Diffusion WebUI…) already uses that port, Bibliobrain takes the next free one, from 7861 to 7870: the start window says which.
 - Run `Repair-Bibliobrain.cmd` to reinstall missing components. Your data is
   separate from the program, under `%LOCALAPPDATA%\bibliobrain`.
 - If that does not help, read `%LOCALAPPDATA%\bibliobrain\logs\bibliobrain.log`.

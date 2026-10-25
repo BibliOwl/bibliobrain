@@ -5,7 +5,7 @@ Français · [English](Troubleshooting-en.md)
 ## L'application ne s'ouvre pas
 
 - Double-cliquez à nouveau sur le raccourci et patientez jusqu'à une minute.
-- Essayez `http://localhost:7860` dans votre navigateur.
+- Essayez `http://localhost:7860` dans votre navigateur. Si un autre programme (Gradio, Stable Diffusion WebUI…) occupe déjà ce port, Bibliobrain prend le suivant libre, de 7861 à 7870 : la fenêtre de démarrage l’indique.
 - Lancez `Repair-Bibliobrain.cmd` (réinstalle les composants manquants ; vos données
   sont séparées du programme, sous `%LOCALAPPDATA%\bibliobrain`).
 - Si rien n'y fait, regardez `%LOCALAPPDATA%\bibliobrain\logs\bibliobrain.log`.

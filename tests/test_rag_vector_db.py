@@ -748,6 +748,7 @@ def test_index_pdf_groups_with_manifest_only_reindexes_changed_files(
         progress_end: float,
         status_label: str = "Lecture PDF",
         textless_paths: set[str] | None = None,
+        failed_paths: dict[str, str] | None = None,
     ) -> tuple[list[Document], list[Document], int]:
         captured_groups.append(list(pdf_list))
         return (
@@ -2681,3 +2682,285 @@ def test_stream_chat_api_does_not_source_a_value_from_a_page_number(
     answer = _final_answer(events)
     assert answer.startswith("Le SCIF vaut 64 T [S1].")
     assert answer.endswith("*Valeurs à vérifier, absentes des passages retrouvés : 64.*")
+
+
+def test_index_pdf_groups_keeps_existing_chunks_of_a_file_that_fails_to_read(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    # A file that was indexed and now fails to read (a parser update, a cloud
+    # placeholder) kept nothing: its chunks were deleted and it came back as
+    # "new" on every reload. It now keeps its chunks and records the reason.
+    rag = _load_rag_modules(workspace_tmp_dir)
+
+    def fake_build_chunks_from_pdfs(**kwargs: Any) -> tuple[list[Document], list[Document], int]:
+        kwargs["failed_paths"]["papers/broken.pdf"] = "LimitReachedError: too many tokens"
+        return (
+            [Document(page_content="note", metadata={"rel_path": "papers/broken.pdf"})],
+            [Document(page_content="ok", metadata={"rel_path": "papers/ok.pdf"})],
+            1,
+        )
+
+    monkeypatch.setattr(rag.vector_store, "_build_chunks_from_pdfs", fake_build_chunks_from_pdfs)
+    current_entries = {
+        "papers/ok.pdf": {"file_sig": "sig-ok", "zotero_sig": ""},
+        "papers/broken.pdf": {"file_sig": "sig-broken-new", "zotero_sig": ""},
+    }
+    vectorstore = FakeChroma()
+
+    entries, _resumed, indexed, *_ = rag.vector_store._index_pdf_groups_with_manifest(
+        target_vectorstore=vectorstore,
+        pdf_list=[
+            ("papers/ok.pdf", "X:/papers/ok.pdf"),
+            ("papers/broken.pdf", "X:/papers/broken.pdf"),
+        ],
+        current_entries=current_entries,
+        manifest_entries={
+            "papers/broken.pdf": {"file_sig": "sig-broken-old", "zotero_sig": "", "chunk_count": 7}
+        },
+        chunk_size=1000,
+        progress=lambda frac, desc="": None,
+        progress_start=0.0,
+        progress_end=1.0,
+        read_label="Lecture",
+        index_label="Vectorisation",
+    )
+
+    assert indexed == 1
+    assert vectorstore.deleted_filters == [{"rel_path": "papers/ok.pdf"}]
+    broken = entries["papers/broken.pdf"]
+    assert broken["chunk_count"] == 7
+    assert broken["file_sig"] == "sig-broken-new"
+    assert broken["failed"]["reason"].startswith("LimitReachedError")
+    assert rag.vector_store._manifest_entry_settled(broken)
+
+    changes = rag.vector_store._preview_manifest_changes(
+        current_entries=current_entries, previous_entries=entries
+    )
+    assert changes["new_count"] == 0
+    assert changes["modified_count"] == 0
+    assert changes["failed_files"] == [
+        {"rel_path": "papers/broken.pdf", "reason": broken["failed"]["reason"]}
+    ]
+
+
+def test_a_read_failure_is_retried_by_a_newer_app_version(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    entry = {
+        "file_sig": "sig",
+        "zotero_sig": "",
+        "chunk_count": 0,
+        "failed": {"reason": "boom", "version": "0.0.1-old"},
+    }
+    assert not rag.vector_store._manifest_entry_settled(entry)
+    monkeypatch.setattr(rag.vector_store, "get_app_version", lambda: "0.0.1-old")
+    assert rag.vector_store._manifest_entry_settled(entry)
+
+
+_FE_SC_DOCS = [
+    Document(
+        page_content=(
+            "Chapter 4 Iron-Based Superconductors. Abstract The iron-based superconductors "
+            "(Fe-SCs) comprise a big family having the highest Tc = 55 K. An indispensable "
+            "element is the typical magnetic element Fe."
+        ),
+        metadata={
+            "source": "L6EDW2A4/Uchida - 2015.pdf",
+            "page": 67,
+            "zotero_title": "High temperature superconductivity",
+            "zotero_year": "2015",
+        },
+    ),
+]
+_IODINE_ANSWER = "Uchida décrit des composés de fer basés sur l'iode, avec Tc = 55 K [S1]."
+
+
+def test_stream_chat_api_lists_an_element_no_passage_names(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+
+    def failing_repair(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(rag.query_engine, "invoke_structured_chat", failing_repair)
+    events, _ = _stream_with_fake_answer(
+        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Uchida sur les Fe-SCs ?"
+    )
+
+    answer = _final_answer(events)
+    assert answer.startswith(_IODINE_ANSWER)
+    assert answer.endswith("*Termes à vérifier, absents des passages retrouvés : iode.*")
+    guard = [e for e in events if e.get("stage") == "answer_guard"]
+    assert guard[0]["data"]["terms_to_check"] == 1
+    assert guard[0]["data"]["terms_repaired"] is False
+
+
+def test_stream_chat_api_rewrites_an_invented_element_with_the_source_term(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    prompts: list[str] = []
+
+    def repair(_model: str, messages: list[dict[str, str]], **_kwargs: Any) -> Any:
+        prompts.append(messages[-1]["content"])
+        return rag.query_engine.ChatAnswer(
+            answer="Uchida décrit des supraconducteurs à base de fer (Fe-SCs), avec Tc = 55 K [S1]."
+        )
+
+    monkeypatch.setattr(rag.query_engine, "invoke_structured_chat", repair)
+    events, _ = _stream_with_fake_answer(
+        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Uchida sur les Fe-SCs ?"
+    )
+
+    answer = _final_answer(events)
+    assert answer == "Uchida décrit des supraconducteurs à base de fer (Fe-SCs), avec Tc = 55 K [S1]."
+    assert "« iode »" in prompts[0]
+
+
+def test_stream_chat_api_keeps_the_answer_when_the_rewrite_adds_a_figure(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    monkeypatch.setattr(
+        rag.query_engine,
+        "invoke_structured_chat",
+        lambda *_a, **_k: rag.query_engine.ChatAnswer(
+            answer="Uchida décrit des composés de fer avec Tc = 77 K [S1]."
+        ),
+    )
+    events, _ = _stream_with_fake_answer(
+        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Uchida sur les Fe-SCs ?"
+    )
+
+    answer = _final_answer(events)
+    assert answer.startswith(_IODINE_ANSWER)
+    assert "iode" in answer.splitlines()[-1]
+
+
+def test_stream_chat_api_reports_every_passage_given_to_the_model(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    docs = [*_SCIF_DOCS]
+    docs[1] = Document(
+        page_content=docs[1].page_content,
+        metadata={**docs[1].metadata, "chunk_uid": "ABC:6:ff"},
+    )
+    events, _ = _stream_with_fake_answer(
+        rag, monkeypatch, docs, "Le SCIF vaut -0,42 T [S1].", "Quel est le SCIF ?"
+    )
+
+    passages = [e for e in events if e.get("type") == "context_passages"]
+    assert len(passages) == 1
+    records = passages[0]["data"]
+    assert [record["ref_label"] for record in records] == ["S1", "S2"]
+    assert records[1]["chunk_uid"] == "ABC:6:ff"
+    assert records[1]["opening"].startswith("At 20 K the SCIF")
+
+
+def test_a_named_study_scopes_the_search_to_its_paper(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    from src.rag import paper_list
+
+    monkeypatch.setattr(
+        paper_list,
+        "library_papers",
+        lambda filters=None: [
+            SimpleNamespace(
+                metadata={
+                    "zotero_first_author": "Uchida, Shin-ichi",
+                    "zotero_year": "2015",
+                    "zotero_title": "High temperature superconductivity",
+                    "rel_path": "L6EDW2A4/Uchida - 2015.pdf",
+                }
+            )
+        ],
+    )
+    seen: list[dict[str, list[str]]] = []
+
+    def fake_retrieve(_q: str, _h: Any, _t: float, _n: int, filters: Any, **_k: Any) -> list:
+        seen.append(filters)
+        return []
+
+    monkeypatch.setattr(rag.query_engine, "retrieve_for_question", fake_retrieve)
+    events, docs = _drain_generator(
+        rag.query_engine._stream_retrieval(
+            "Que dit Uchida 2015 sur le dopage ?",
+            "demo-model",
+            0.2,
+            6,
+            tags=None,
+            collections=None,
+            source_paths=None,
+            conversation_history=None,
+            depth="quick",
+            force_visual_analysis=False,
+        )
+    )
+
+    assert seen[0]["sources"] == ["L6EDW2A4/Uchida - 2015.pdf"]
+    assert any("Uchida - 2015.pdf" in str(e.get("msg", "")) for e in events)
+
+
+def _drain_generator(gen: Any) -> tuple[list[dict[str, Any]], Any]:
+    events: list[dict[str, Any]] = []
+    while True:
+        try:
+            events.append(next(gen))
+        except StopIteration as stop:
+            return events, stop.value
+
+
+def test_a_broad_question_on_one_paper_opens_with_passages_spread_over_it(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    from src.rag import lexical_index
+
+    index_path = str(workspace_tmp_dir / "index")
+    rel_path = "L6EDW2A4/Uchida - 2015.pdf"
+    filler = " More text about the materials and their properties." * 5
+    meta = {"rel_path": rel_path, "source": rel_path, "zotero_title": "High temperature superconductivity"}
+    book = [
+        Document(page_content="Preface\nThe cuprates opened the field." + filler, metadata={**meta, "page": 5, "chunk_uid": "U:0:a"}),
+        *[
+            Document(page_content=f"Chapter {n}\nAbstract Chapter {n} opens." + filler, metadata={**meta, "page": 20 * n, "chunk_uid": f"U:{n}:a"})
+            for n in range(1, 6)
+        ],
+        Document(page_content="Conclusions\nThe road goes on." + filler, metadata={**meta, "page": 150, "chunk_uid": "U:9:a"}),
+    ]
+    lexical_index.replace_paths(index_path, [rel_path], book)
+    monkeypatch.setattr(rag.query_engine.state, "runtime_db_path", index_path)
+    searched = [
+        Document(page_content="Body text on page 42 about the pseudogap." + filler, metadata={**meta, "page": 42, "chunk_uid": "U:4:b"})
+        for _ in range(1)
+    ]
+
+    docs = rag.query_engine._with_document_overview(
+        "Que dit Uchida 2015 sur la supraconductivité à haute température ?",
+        searched,
+        {"sources": [rel_path]},
+        6,
+    )
+
+    pages = [doc.metadata["page"] for doc in docs]
+    assert len(docs) == 5
+    assert pages[:4] == sorted(pages[:4]) and pages[0] == 5 and 150 in pages
+    assert pages[-1] == 42  # the search's own passage follows
+
+    narrow = rag.query_engine._with_document_overview(
+        "Quelle est la Tc de LaFeAsO ?", searched, {"sources": [rel_path]}, 6
+    )
+    assert narrow == searched

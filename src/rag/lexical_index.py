@@ -320,9 +320,41 @@ def file_metadata(index_path: str) -> list[dict[str, Any]]:
     return [dict(record) for record in records]
 
 
+def file_chunks(index_path: str, rel_path: str) -> list[Document]:
+    """Every indexed chunk of one file, in the order it was indexed.
+
+    What a question about a whole paper reads to pick its abstract, chapter
+    openings and conclusion. ``rel_path`` is not an indexed column, so this
+    scans the table: about 0.3 s on 90k chunks, only for that kind of question.
+    """
+    wanted = str(rel_path or "").strip()
+    if not wanted or not is_ready(index_path):
+        return []
+    connection = sqlite3.connect(lexical_db_path(index_path), timeout=5.0)
+    try:
+        rows = connection.execute(
+            "SELECT content, metadata_json FROM lexical_chunks WHERE rel_path = ? ORDER BY rowid",
+            (wanted,),
+        ).fetchall()
+    finally:
+        connection.close()
+    documents: list[Document] = []
+    for content, metadata_json in rows:
+        try:
+            metadata = json.loads(str(metadata_json or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.setdefault("rel_path", wanted)
+        documents.append(Document(page_content=str(content or ""), metadata=metadata))
+    return documents
+
+
 __all__ = [
     "delete_paths",
     "ensure_from_vectorstore",
+    "file_chunks",
     "file_metadata",
     "is_ready",
     "lexical_db_path",

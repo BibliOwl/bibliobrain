@@ -26,6 +26,7 @@ from src.api_models import (
     AnalysisPromptRequest,
     DirectoryPickerRequest,
     LibraryExportRequest,
+    LibraryMatchRequest,
     RagExclusionRequest,
     SetDataPathRequest,
     SummaryRequest,
@@ -44,6 +45,7 @@ from src.library import (
     list_duplicate_documents,
     list_library,
     list_metadata_issues,
+    match_library_papers,
     propose_metadata_correction,
 )
 from src.library_import import ImportRejected, receive_document, upload_target
@@ -161,6 +163,12 @@ def api_library_export(req: LibraryExportRequest):
             "X-Exported-Items": str(exported["count"]),
         },
     )
+
+
+@router.post("/api/library/match")
+async def api_library_match(req: LibraryMatchRequest):
+    papers = [paper.model_dump() for paper in req.papers]
+    return {"matches": await asyncio.to_thread(match_library_papers, papers)}
 
 
 @router.get("/api/library/upload-target")

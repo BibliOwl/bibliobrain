@@ -367,8 +367,13 @@ html[data-performance-mode="light"] .drafting-selection-toolbar { background: va
 .nb-ws-more-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; display: grid; gap: 2px; min-width: 210px; padding: 6px; border: 1px solid var(--border-2); border-radius: 12px; background: var(--surface-float); box-shadow: var(--shadow-3); }
 .nb-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; }
 .nb-menu-item:hover { background: var(--glass-2); }
-.nb-suggestions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 360px; margin-top: 10px; }
+.nb-suggestions { pointer-events: auto; display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 360px; margin-top: 10px; }
 .nb-suggestion { padding: 8px 12px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--glass-1); color: var(--text-2); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; }
+.nb-source-status { margin-top: 4px; font-size: 0.72rem; color: var(--muted); }
+.nb-source-status::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.nb-source-status.is-pdf::before { background: var(--success, #22c55e); }
+.nb-source-status.is-text::before { background: var(--warning, #f59e0b); }
+a.nb-source-item-open { text-decoration: none; }
 .nb-suggestion:hover { border-color: var(--accent-border); background: var(--accent-soft); color: var(--text); }
 dialog#nb-create-form { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100vh - 32px); overflow: auto; display: none; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 12px; width: min(440px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--border-2); border-radius: 16px; background: var(--surface-float); color: var(--text); box-shadow: var(--shadow-3); }
 dialog#nb-create-form[open] { display: flex; }
@@ -435,8 +440,23 @@ dialog#nb-create-form #nb-new-title, dialog#nb-create-form #nb-zotero-collection
 .discovery-notebook-dialog[open] { display: flex; }
 .discovery-notebook-dialog::backdrop { background: rgba(2, 6, 23, 0.55); }
 .discovery-notebook-dialog h3 { margin: 0; font-size: 1rem; }
-.discovery-notebook-dialog-list { display: grid; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.discovery-notebook-dialog-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; max-height: 50vh; overflow-y: auto; }
 .discovery-notebook-choice { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--glass-1); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .discovery-notebook-choice:hover { border-color: var(--accent-border); background: var(--accent-soft); }
 .discovery-notebook-choice span, .discovery-notebook-dialog-empty { font-size: 0.8rem; color: var(--muted); }
+.discovery-notebook-new { display: grid; grid-template-columns: minmax(0, 1fr); }
+.discovery-notebook-new-toggle { align-items: center; border-style: dashed; }
+.discovery-notebook-new-toggle strong { flex-shrink: 0; color: var(--accent); white-space: nowrap; }
+.discovery-notebook-new-toggle span { text-align: right; }
+.discovery-notebook-new-form { display: flex; gap: 8px; min-width: 0; }
+.discovery-notebook-new-form .btn { flex-shrink: 0; white-space: nowrap; }
+.discovery-notebook-new-form[hidden], .discovery-notebook-new-toggle[hidden] { display: none; }
+.discovery-notebook-new-title { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--glass-1); color: var(--text); font: inherit; }
+.discovery-notebook-new-title:focus { outline: none; border-color: var(--accent-border); }
+.discovery-notebook-missing { padding: 10px 12px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--glass-1); font-size: 0.8rem; color: var(--text-2); }
+.discovery-notebook-missing p { margin: 0 0 6px; }
+.discovery-notebook-missing ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.discovery-notebook-missing li { display: flex; justify-content: space-between; gap: 10px; }
+.discovery-notebook-missing li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discovery-notebook-missing li a { flex-shrink: 0; color: var(--accent); }
 .discovery-notebook-dialog-actions { display: flex; justify-content: flex-end; }

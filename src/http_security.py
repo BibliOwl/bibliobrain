@@ -175,8 +175,22 @@ def is_safe_origin(origin: str) -> bool:
     return False
 
 
+def _served_port_origins() -> list[str]:
+    """The local origins of the port this server runs on, when it is not 7860."""
+    try:
+        port = int(os.getenv("BIBLIOBRAIN_PORT", "") or 0)
+    except ValueError:
+        return []
+    if not 0 < port < 65536 or port == 7860:
+        return []
+    return [f"http://localhost:{port}", f"http://127.0.0.1:{port}"]
+
+
 def parse_allowed_origins(raw: str | None = None) -> list[str]:
-    """Return the safe origins from ``ALLOWED_ORIGINS`` (or ``raw``), never empty."""
+    """Return the safe origins from ``ALLOWED_ORIGINS`` (or ``raw``), never empty.
+
+    The page served on a fallback port (``BIBLIOBRAIN_PORT``) is always allowed.
+    """
     if raw is None:
         raw = os.getenv("ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
     candidates = [origin.strip() for origin in str(raw or "").split(",") if origin.strip()]
@@ -184,6 +198,9 @@ def parse_allowed_origins(raw: str | None = None) -> list[str]:
     for rejected in candidates:
         if rejected not in allowed:
             logger.warning("CORS: origine rejetee (non-locale ou wildcard): %s", rejected)
+    for origin in _served_port_origins():
+        if origin not in allowed:
+            allowed.append(origin)
     return allowed or ["http://localhost:7860"]
 
 

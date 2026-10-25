@@ -8,6 +8,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -478,3 +479,43 @@ def test_packaging_supports_the_in_app_update() -> None:
 
     assert "$ReleaseBaseUrl" in builder
     assert "release_tools.py" in builder
+
+
+def test_a_cut_download_leaves_no_partial_package(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cut(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("connection reset", request=request)
+
+    _client_with_transport(monkeypatch, cut)
+    installer = {
+        "url": "https://github.com/owner/repo/releases/download/v9.0.0/Bibliobrain-Setup.exe",
+        "sha256": "0" * 64,
+        "size": 10,
+    }
+
+    with pytest.raises(httpx.ReadError):
+        update_check._download_installer(installer, "9.0.0")
+
+    assert list((isolated_home / "storage/updates").iterdir()) == []
+
+
+def test_the_update_is_refused_up_front_on_a_full_disk(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested: list[str] = []
+    _client_with_transport(
+        monkeypatch, lambda request: requested.append(str(request.url)) or httpx.Response(200)
+    )
+    monkeypatch.setattr(
+        update_check.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000)
+    )
+    installer = {
+        "url": "https://github.com/owner/repo/releases/download/v9.0.0/Bibliobrain-Setup.exe",
+        "sha256": "0" * 64,
+        "size": 1000,
+    }
+
+    with pytest.raises(ManifestError, match="disk space"):
+        update_check._download_installer(installer, "9.0.0")
+    assert requested == []

@@ -861,6 +861,7 @@ class _ChatTurn:
     discovery_session_meta: dict[str, object] | None = None
     external_search_confirmation_meta: dict[str, object] | None = None
     pipeline_metrics: list[dict] = field(default_factory=list)
+    context_passages: list[dict] = field(default_factory=list)
     saw_error_msg: str = ""
     started_at: float = field(default_factory=time.perf_counter)
     first_token_at: float | None = None
@@ -1267,6 +1268,10 @@ async def _relay_tool_stream(turn: _ChatTurn, gen):
             turn.replace_answer_text(replacement)
             yield sse({"type": "answer_replace", "text": replacement})
             continue
+        if kind == "context_passages":
+            # Saved with the answer for later checks; the page has no use for it.
+            turn.context_passages = list(chunk.get("data") or [])
+            continue
         if kind == "sources":
             turn.final_sources = list(chunk.get("data") or [])
             turn.answer_origin = str(chunk.get("answer_origin") or "").strip()
@@ -1306,6 +1311,8 @@ def _save_assistant_answer(turn: _ChatTurn) -> None:
                 "planner_choice": turn.planner_choice,
             },
         }
+        if turn.context_passages:
+            assistant_meta["context_passages"] = turn.context_passages
         if turn.export_file_meta:
             assistant_meta["export_file"] = turn.export_file_meta
         assistant_meta.update(turn.discovery_session_entry())
@@ -1322,6 +1329,31 @@ def _save_assistant_answer(turn: _ChatTurn) -> None:
             model=req.model,
             meta={"error": True, "mode": turn.chat_mode},
         )
+
+
+def _save_interrupted_review(
+    chat_id: str, full_answer: str, sources: list[dict], model: str, reason: str
+) -> None:
+    """Keep what a stopped literature review had written, like a stopped chat answer."""
+    if not chat_id:
+        return
+    interruption_text = stream_interruption_text(reason)
+    text = f"{full_answer}\n\n{interruption_text}" if full_answer.strip() else interruption_text
+    try:
+        add_chat_message(
+            chat_id,
+            "assistant",
+            text,
+            model=model,
+            meta={
+                "sources": sources if full_answer.strip() else [],
+                "mode": "literature_review",
+                "interrupted": True,
+                "interruption_reason": reason,
+            },
+        )
+    except Exception:
+        _logger.warning("Could not save the interrupted literature review", exc_info=True)
 
 
 def _save_interrupted_answer(turn: _ChatTurn, reason: str) -> None:
@@ -1586,10 +1618,20 @@ async def api_literature_review(req: LiteratureReviewRequest):
                     meta={"error": True, "mode": "literature_review"},
                 )
         except InterruptedError:
+            _save_interrupted_review(
+                chat_id, full_answer, final_sources, req.model, stream_abort_reason(abort_signal)
+            )
             return
         except asyncio.CancelledError:
-            abort_signal.abort("client_disconnected")
+            abort_signal.abort("client_disconnect")
             await stop_local_ollama_model_async(req.model)
+            _save_interrupted_review(
+                chat_id,
+                full_answer,
+                final_sources,
+                req.model,
+                stream_abort_reason(abort_signal, "client_disconnect"),
+            )
             raise
         except Exception:
             _logger.exception("Literature review stream failed")

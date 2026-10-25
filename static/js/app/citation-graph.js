@@ -1847,10 +1847,17 @@ async function _nbCgAddToNotebook(nodeId) {
   _nbCg.addingIds.add(nodeId);
   _nbCgRenderPanel();
   try {
+    const [path] = (await _discoveryLibraryPaths([item])) || [''];
+    if (!path) {
+      showToast(_ti('discovery.notInLibraryToast'), 5000, 'error');
+      return;
+    }
+    const body = await _discoveryNotebookSourceBody(item, path);
+    if (!body) throw new Error('extract');
     const response = await fetch(`/api/notebooks/${encodeURIComponent(notebookId)}/sources`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: _discoveryNotebookSourceTitle(item), content: _discoveryNotebookSourceText(item) }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(String(response.status));
     const payload = await response.json().catch(() => ({}));

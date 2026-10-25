@@ -19,7 +19,19 @@ def test_every_local_script_and_stylesheet_is_cache_busted() -> None:
 
     assert assets
     unversioned = [url for url, version in assets if not version]
-    assert unversioned == [], "add ?v= so the served page versions these assets"
+    assert unversioned == [], "add ?v=auto so the served page versions these assets"
+
+
+def test_source_index_leaves_versions_to_the_server() -> None:
+    # The server writes each file's content hash when it serves the page, so a
+    # tag written by hand changes nothing, and every branch that bumped one
+    # conflicted with every other branch on the same lines.
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    hand_written = sorted(
+        {url for url, version in LOCAL_ASSET_RE.findall(html) if version and version != "auto"}
+    )
+    assert hand_written == [], "write ?v=auto: the server versions assets by content"
 
 
 def test_served_index_versions_each_asset_by_its_content() -> None:

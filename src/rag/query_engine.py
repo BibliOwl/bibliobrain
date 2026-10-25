@@ -35,6 +35,7 @@ from src.chat_intents import (
     refers_to_previous_answer,
 )
 from src.chat_output_guard import ChatGuardReport, strip_invalid_citations, validate_chat_output
+from src.chat_term_grounding import is_chemical_term, ungrounded_terms
 from src.file_access import resolve_pdf_path
 from src.llm_provider import (
     StreamAbortSignal,
@@ -121,7 +122,14 @@ from .lexical_index import (
 from .lexical_index import (
     ensure_from_vectorstore as ensure_lexical_index,
 )
+from .lexical_index import file_chunks as lexical_file_chunks
 from .lexical_index import search as search_lexical_index
+from .study_scope import (
+    named_studies,
+    overview_passages,
+    overview_share,
+    resolve_study_sources,
+)
 from .vector_store import (
     _chroma_client_settings,
     _clear_incomplete_index_marker,
@@ -135,6 +143,7 @@ from .vector_store import (
     _load_manifest_entries,
     _manifest_chunk_count,
     _manifest_entry_matches,
+    _manifest_failure,
     _manifest_no_text,
     _mark_index_incomplete,
     _merge_filter_maps,
@@ -1323,7 +1332,7 @@ def _collect_lexical_metadata_docs(
         try:
             total_count = max(0, int(collection.count()))
         except Exception:
-            _logger.debug(
+            _logger.warning(
                 "Recovered from an error in _collect_lexical_metadata_docs.", exc_info=True
             )
             total_count = 50000
@@ -1364,12 +1373,12 @@ def _collect_lexical_metadata_docs(
                     limit=scan_limit,
                 )
             except Exception:
-                _logger.debug(
+                _logger.warning(
                     "Recovered from an error in _collect_lexical_metadata_docs.", exc_info=True
                 )
                 return []
         except Exception:
-            _logger.debug(
+            _logger.warning(
                 "Recovered from an error in _collect_lexical_metadata_docs.", exc_info=True
             )
             if offset == 0:
@@ -2556,6 +2565,14 @@ _L10N: dict[str, dict[str, str]] = {
         "fr": "*Valeurs à vérifier, absentes des passages retrouvés : {values}.*",
         "en": "*Values to check, not found in the retrieved passages: {values}.*",
     },
+    "terms_to_check": {
+        "fr": "*Termes à vérifier, absents des passages retrouvés : {terms}.*",
+        "en": "*Terms to check, not found in the retrieved passages: {terms}.*",
+    },
+    "terms_repairing": {
+        "fr": "Termes absents des sources détectés, correction en cours...",
+        "en": "Terms missing from the sources detected, correcting...",
+    },
     "repair_impossible_fallback": {
         "fr": "Reparation impossible, reponse prudente utilisee ({reason}).",
         "en": "Repair impossible, using cautious response ({reason}).",
@@ -2821,6 +2838,19 @@ def _library_overview_task(message: str, docs: list[Document]) -> str:
     return "\n".join(lines)
 
 
+# A 3B model translating "iron-based (Fe)" wrote "basés sur l'iode": names of
+# materials and methods are where a translation invents facts.
+_TERMS_RULE_EN = (
+    "Write the names of materials, chemical elements, compounds, formulas, acronyms and "
+    "methods exactly as the sources write them; never add one the sources do not contain."
+)
+_TERMS_RULE_FR = (
+    "Recopie les noms de materiaux, elements chimiques, composes, formules, sigles et "
+    "methodes tels que les sources les ecrivent, avec au "
+    "besoin la traduction entre parentheses ; n'en ajoute aucun qui soit absent des sources."
+)
+
+
 def _build_response_style_guide(message: str, model_name: str | None = None) -> str:
     normalized = _normalize_text(message)
     deep_analysis = is_deep_article_analysis_request(message)
@@ -2877,6 +2907,7 @@ def _build_response_style_guide(message: str, model_name: str | None = None) -> 
             "Do not produce a simple list of sources or peripheral facts.",
             "Only cover points that help answer the current question.",
             "Do not use mandatory sections such as Answer, Explanation or Response note.",
+            _TERMS_RULE_EN,
         ]
     else:
         lines = [
@@ -2888,6 +2919,7 @@ def _build_response_style_guide(message: str, model_name: str | None = None) -> 
             "Ne fais pas une simple liste de sources ou de faits periferiques.",
             "Ne couvre que les points utiles pour repondre a la question actuelle.",
             "N'utilise pas de sections imposees comme Answer, Explanation ou Response note.",
+            _TERMS_RULE_FR,
         ]
     if deep_analysis:
         lines.append(
@@ -3500,7 +3532,7 @@ def _repair_guarded_chat_output(
             return repaired_report.normalized_text, repaired_report, True, ""
         reason = f"repair_failed_guard:{','.join(issue.code for issue in repaired_report.issues)}"
     except Exception as exc:
-        _logger.debug("Recovered from an error in _repair_guarded_chat_output.", exc_info=True)
+        _logger.warning("Recovered from an error in _repair_guarded_chat_output.", exc_info=True)
         reason = f"repair_exception:{exc}"
 
     fallback_report = validate_chat_output(
@@ -3510,6 +3542,89 @@ def _repair_guarded_chat_output(
         require_structure=False,
     )
     return fallback_report.normalized_text, fallback_report, False, reason
+
+
+def _repair_ungrounded_terms(
+    *,
+    model_name: str,
+    user_query: str,
+    answer_text: str,
+    source_docs: list[Document],
+    terms: list[str],
+    history_context: str = "",
+) -> str:
+    """One rewrite of an answer that names elements or acronyms no passage has.
+
+    Returns the corrected answer, or "" when the rewrite still names a term
+    found nowhere, breaks its citations or adds a figure: the caller then
+    keeps the answer and lists the terms to check.
+    """
+    listed = ", ".join(f"« {term} »" for term in terms)
+    context_text = _format_context_for_direct_chat(source_docs)
+    prompt = (
+        "Tu relis une reponse avant affichage.\n"
+        f"Ces termes n'apparaissent dans aucune source : {listed}.\n"
+        "Reecris la reponse en remplacant chaque terme par celui que les sources "
+        "emploient vraiment, ou en retirant l'affirmation si les sources ne disent rien. "
+        "Garde tout le reste, les citations [Sx] et la langue de la reponse. "
+        "N'ajoute aucun fait.\n\n"
+        f"Question:\n{user_query}\n\n"
+        f"Sources:\n{context_text}\n\n"
+        f"Reponse a corriger:\n{answer_text}\n\n"
+        f"{_response_language_instruction()}"
+    )
+    try:
+        structured = invoke_structured_chat(
+            model_name,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Tu corriges les termes techniques d'une reponse sourcee. "
+                        "Tu n'emploies que des termes ecrits dans les sources."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            top_p=1.0,
+        )
+    except Exception:
+        _logger.debug("Term repair failed.", exc_info=True)
+        return ""
+    if not isinstance(structured, ChatAnswer):
+        return ""
+    candidate = normalize_chunk_citation_markup(str(structured.answer or "")).strip()
+    candidate = strip_invalid_citations(candidate, sources=source_docs)
+    if not candidate:
+        return ""
+    passages = grounding_passages(source_docs)
+    # The rewrite may keep an acronym the passages lack, never a chemical name,
+    # and must not bring a new term of either kind.
+    left = ungrounded_terms(candidate, passages, question=user_query, extra_texts=[history_context])
+    if any(is_chemical_term(term) for term in left) or set(left) - set(terms):
+        return ""
+    before = check_answer_grounding(
+        answer_text, passages, question=user_query, extra_texts=[history_context]
+    )
+    after = check_answer_grounding(
+        candidate, passages, question=user_query, extra_texts=[history_context]
+    )
+    if set(after.ungrounded_values) - set(before.ungrounded_values):
+        return ""
+    if _extract_answer_citation_labels(answer_text) and not _extract_answer_citation_labels(
+        candidate
+    ):
+        return ""
+    report = validate_chat_output(
+        candidate,
+        sources=source_docs,
+        context_text=context_text,
+        require_structure=False,
+    )
+    if report.severity == "error":
+        return ""
+    return report.normalized_text
 
 
 def init_rag(
@@ -3549,7 +3664,7 @@ def init_rag(
             embedding_profile = current_embedding_profile_label(embedding_model)
         embeddings = create_embeddings(embedding_model)
     except Exception as exc:
-        _logger.debug("Recovered from an error in init_rag.", exc_info=True)
+        _logger.warning("Recovered from an error in init_rag.", exc_info=True)
         return False, f"Erreur configuration embeddings: {exc}"
     # Same model under another name or service: reuse its index, do not rebuild.
     adopt_equivalent_vector_index(chunk_size=chunk_size, embedding_model=embedding_profile)
@@ -3720,6 +3835,7 @@ def init_rag(
                             entry,
                             chunk_count=_manifest_chunk_count(previous),
                             no_text=_manifest_no_text(previous),
+                            failed=_manifest_failure(previous),
                         )
                 if did_mutate_index:
                     _mark_index_incomplete(db_path=db_path)
@@ -3883,7 +3999,7 @@ def init_rag(
             except Exception as exc:
                 # A DLL blocked by Windows is not a damaged index: rebuilding
                 # it would not help, so say what actually failed.
-                _logger.debug("Recovered from an error in init_rag.", exc_info=True)
+                _logger.warning("Recovered from an error in init_rag.", exc_info=True)
                 native_msg = native_library_message(exc, _current_ui_language())
                 return (
                     False,
@@ -3899,7 +4015,7 @@ def init_rag(
             try:
                 llm = create_chat_llm(model_name)
             except Exception as exc:
-                _logger.debug("Recovered from an error in init_rag.", exc_info=True)
+                _logger.warning("Recovered from an error in init_rag.", exc_info=True)
                 return False, _t("llm_config_error", error=exc)
             prompt = ChatPromptTemplate.from_messages(
                 [
@@ -3973,6 +4089,81 @@ def _has_query_content(message: str) -> bool:
     )
 
 
+def _named_study_sources(message: str) -> list[str]:
+    """The library papers a question names as "Uchida 2015", as source filters.
+
+    Without it the name and year were only words of the search, and a
+    question about a book got passages from anywhere in the library.
+    """
+    if not named_studies(message):
+        return []
+    started = time.perf_counter()
+    try:
+        from src.rag.paper_list import library_papers
+
+        records = resolve_study_sources(message, library_papers())
+    except Exception:
+        _logger.warning("Named study lookup failed", exc_info=True)
+        return []
+    paths = [str(record.get("rel_path") or record.get("source") or "") for record in records]
+    paths = [path for path in paths if path]
+    _record_pipeline_metric(
+        "study_scope",
+        {"duration_ms": _duration_ms(started), "papers": len(paths)},
+    )
+    return paths
+
+
+def _with_document_overview(
+    message: str,
+    docs: list[Document],
+    filters: dict[str, list[str]],
+    max_chunks: int,
+) -> list[Document]:
+    """Open a broad question about one paper with passages spread over all of it.
+
+    Twelve passages chosen by similarity to "la supraconductivité à haute
+    température" came from a few pages of a 300-page book: the answer left
+    out the cuprates, its main subject. The abstract, chapter openings and
+    conclusion come first; the passages the search chose fill the rest.
+    """
+    sources = [value for value in (filters or {}).get("sources") or [] if str(value).strip()]
+    if len(sources) != 1 or max_chunks < 2:
+        return docs
+    started = time.perf_counter()
+    with state._state_lock:
+        index_path = str(state.runtime_db_path or "")
+    if not index_path:
+        return docs
+    rel_path = str(((docs[0].metadata or {}).get("rel_path") if docs else "") or sources[0])
+    try:
+        chunks = lexical_file_chunks(index_path, rel_path)
+        if not chunks and rel_path != sources[0]:
+            chunks = lexical_file_chunks(index_path, sources[0])
+    except Exception:
+        _logger.warning("Document overview unavailable", exc_info=True)
+        return docs
+    if not chunks:
+        return docs
+    title = str((chunks[0].metadata or {}).get("zotero_title") or "")
+    share = overview_share(message, title, studies=named_studies(message))
+    if not share:
+        return docs
+    count = max(1, round(max_chunks * share))
+    overview = [_sanitize_document(chunk) for chunk in overview_passages(chunks, count)]
+    merged = _dedupe_documents_by_content([*overview, *docs])[:max_chunks]
+    _record_pipeline_metric(
+        "document_overview",
+        {
+            "duration_ms": _duration_ms(started),
+            "document_chunks": len(chunks),
+            "overview_passages": len(overview),
+            "share": round(share, 2),
+        },
+    )
+    return merged
+
+
 def _stream_retrieval(
     message: str,
     model_name: str,
@@ -4011,6 +4202,10 @@ def _stream_retrieval(
     )
     cleaned_message, inline_filters = _extract_inline_filters(message)
     filters = _merge_filter_maps(explicit_filters, inline_filters)
+    if not any(filters.get(key) for key in ("sources", "authors", "years", "dois")):
+        named_sources = _named_study_sources(cleaned_message)
+        if named_sources:
+            filters = {**filters, "sources": named_sources}
 
     summary = _filter_summary(filters)
     if summary:
@@ -4023,6 +4218,9 @@ def _stream_retrieval(
         effective_max_chunks,
         filters,
         depth=depth,
+    )
+    retrieved_docs = _with_document_overview(
+        cleaned_message, retrieved_docs, filters, effective_max_chunks
     )
     _pending_pipeline_metrics = _consume_pipeline_metrics()
     # Capture rerank metrics immediately — before any yield — because asyncio.to_thread(next, gen)
@@ -4292,7 +4490,7 @@ def stream_chat_api(
             {"output_chars": len(answer_text or ""), **generation_timings},
         )
     except Exception as exc:
-        _logger.debug("Recovered from an error in stream_chat_api.", exc_info=True)
+        _logger.warning("Recovered from an error in stream_chat_api.", exc_info=True)
         message = str(exc).strip() or "Erreur inconnue"
         # Stop already closed the stream, which ends the generation: unloading
         # would only make the next question reload the model.
@@ -4345,13 +4543,45 @@ def stream_chat_api(
                 "type": "status",
                 "msg": _t("repair_impossible_fallback", reason=repair_reason),
             }
+    passages_for_check = grounding_passages(citation_docs)
+    missing_terms = ungrounded_terms(
+        answer_text,
+        passages_for_check,
+        question=cleaned_message,
+        extra_texts=[history_context],
+    )
+    terms_repaired = False
+    if any(is_chemical_term(term) for term in missing_terms):
+        yield {"type": "status", "msg": _t("terms_repairing")}
+        repaired_text = _repair_ungrounded_terms(
+            model_name=model_name,
+            user_query=cleaned_message,
+            answer_text=answer_text,
+            source_docs=citation_docs,
+            terms=missing_terms,
+            history_context=history_context,
+        )
+        if repaired_text:
+            answer_text = repaired_text
+            terms_repaired = True
+            missing_terms = ungrounded_terms(
+                answer_text,
+                passages_for_check,
+                question=cleaned_message,
+                extra_texts=[history_context],
+            )
+            yield {"type": "status", "msg": _t("response_repaired")}
     grounding = check_answer_grounding(
         answer_text,
-        grounding_passages(citation_docs),
+        passages_for_check,
         question=cleaned_message,
         extra_texts=[history_context],
     )
     answer_text = grounding.text
+    if missing_terms:
+        # Said, not removed, like the figures below: the reader checks the source.
+        note = _t("terms_to_check", terms=" ; ".join(missing_terms))
+        answer_text = f"{answer_text.rstrip()}\n\n{note}"
     if grounding.ungrounded_values:
         # Said, not removed: the figure may be a correct calculation, and
         # deleting a wrong one would leave a sentence that reads as sourced.
@@ -4363,6 +4593,8 @@ def stream_chat_api(
         {
             "severity": str(getattr(guard_report, "severity", "") or ""),
             "values_to_check": len(grounding.ungrounded_values),
+            "terms_to_check": len(missing_terms),
+            "terms_repaired": terms_repaired,
         },
     )
     cited_docs = _filter_citation_docs_by_answer(answer_text, citation_docs)
@@ -4378,6 +4610,7 @@ def stream_chat_api(
         for piece in _split_text_for_streaming(final_display_text):
             yield {"type": "token", "text": piece}
     yield {"type": "sources", "data": format_sources_api(cited_docs), "answer_origin": "rag"}
+    yield {"type": "context_passages", "data": context_passage_records(citation_docs)}
     for metric in _pending_pipeline_metrics:
         yield metric
     if _pending_rerank_metrics:
@@ -4523,6 +4756,31 @@ def _source_snippet_for_display(text: str, *, limit: int = 320) -> str:
     if len(normalized) > limit:
         snippet = snippet.rstrip(" .,;:") + "..."
     return snippet
+
+
+def context_passage_records(docs: list) -> list[dict]:
+    """Every passage the model was given, cited or not, as saved with the answer.
+
+    The saved sources are only the cited ones: an invented term could not be
+    traced back to the eleven passages the model read but did not cite.
+    ``chunk_uid`` finds the whole passage in the index; the opening is kept
+    so a record still reads after a re-index.
+    """
+    records: list[dict] = []
+    for index, doc in enumerate(docs or [], start=1):
+        metadata = doc.metadata or {}
+        records.append(
+            {
+                "ref_label": _source_ref_label(doc, index),
+                "file": _safe_relpath(str(metadata.get("source", ""))),
+                "page": metadata.get("page", "?"),
+                "chunk_uid": str(metadata.get("chunk_uid", "") or ""),
+                "content_type": metadata.get("content_type", "pdf_page"),
+                "retrieval_score": metadata.get("rag_retrieval_score"),
+                "opening": re.sub(r"\s+", " ", str(doc.page_content or "")).strip()[:240],
+            }
+        )
+    return records
 
 
 def format_sources_api(docs: list) -> list[dict]:

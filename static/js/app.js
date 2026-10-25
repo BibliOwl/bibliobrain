@@ -285,6 +285,8 @@ let _statusPanel = null;
  *   view: Function}} task
  *   percent: progress bar under the pill text while working.
  *   action: a button inside the pill, shown for 'needs' and 'blocked' only.
+ *   yieldsToWork: a 'needs' task that only asks to resume paused work; it
+ *   gives the pill to any task in progress and stays in "+N" and the card.
  *   view() returns {title, detail, eta?, percent?, facts?: [{term, value, items?, more?}],
  *   actions?: [{label, onClick, primary?}]} for the Activity card.
  */
@@ -298,16 +300,23 @@ function statusTaskTone(id) {
   return _statusTasks.get(id)?.tone || '';
 }
 
-function _statusToneRank(task) {
+function _statusToneRank(task, someoneWorks = false) {
   const rank = _STATUS_TONES.indexOf(task?.tone);
+  // Work that waits on the user only to be resumed (an interrupted OCR pass)
+  // steps behind work in progress, so a running library update stays in view.
+  if (someoneWorks && task?.yieldsToWork && task.tone === 'needs') {
+    return _STATUS_TONES.indexOf('working') + 0.5;
+  }
   return rank < 0 ? _STATUS_TONES.length : rank;
 }
 
 // Most urgent first; _STATUS_TASK_ORDER breaks ties.
 function _sortedStatusTaskIds() {
+  const someoneWorks = [..._statusTasks.values()].some((task) => task?.tone === 'working');
+  const rank = (id) => _statusToneRank(_statusTasks.get(id), someoneWorks);
   return _STATUS_TASK_ORDER
     .filter((id) => _statusTasks.has(id))
-    .sort((a, b) => _statusToneRank(_statusTasks.get(a)) - _statusToneRank(_statusTasks.get(b))
+    .sort((a, b) => rank(a) - rank(b)
       || _STATUS_TASK_ORDER.indexOf(a) - _STATUS_TASK_ORDER.indexOf(b));
 }
 
@@ -382,11 +391,11 @@ function _statusPanelFacts(facts) {
     if (items.length) {
       const list = document.createElement('ul');
       list.className = 'status-detail-files';
-      items.forEach(({ change, text }) => {
+      items.forEach(({ change, text, title }) => {
         const item = document.createElement('li');
         item.dataset.change = change;
         item.textContent = text;
-        item.title = text;
+        item.title = title || text;
         list.appendChild(item);
       });
       if (fact.more) {

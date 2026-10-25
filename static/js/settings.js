@@ -845,6 +845,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         : 'Enrichissement automatique des métadonnées désactivé.',
     });
   });
+  document.getElementById('index-standalone-pdfs')?.addEventListener('change', async () => {
+    await syncAppSettings({ silent: true });
+    // The library scan picks the change up: offer the PDFs to add or remove.
+    if (typeof checkRagRefreshNeeded === 'function') void checkRagRefreshNeeded(true);
+  });
   document.getElementById('discovery-query-planner')?.addEventListener('change', (e) => {
     syncAppSettings({
       silent: true,
@@ -1805,6 +1810,7 @@ async function loadAppSettings() {
       setResearchScopeFeatureEnabled(d?.research_scope_enabled !== false);
     }
     applyCheckbox('auto-enrich-pdf-metadata', d?.auto_enrich_pdf_metadata);
+    applyCheckbox('index-standalone-pdfs', d?.index_standalone_pdfs !== false);
     applyCheckbox('discovery-query-planner', d?.discovery_query_planner);
     applyValue('discovery-candidate-multiplier', d?.discovery_candidate_multiplier ?? 4);
     applyValue('discovery-validation-multiplier', d?.discovery_llm_validation_multiplier ?? 3);
@@ -1962,6 +1968,7 @@ async function syncAppSettings(options = {}) {
       metadata_source: state.metadataSource
         || inferMetadataSource(document.getElementById('zotero-path')?.value || ''),
       auto_enrich_pdf_metadata: Boolean(document.getElementById('auto-enrich-pdf-metadata')?.checked),
+      index_standalone_pdfs: Boolean(document.getElementById('index-standalone-pdfs')?.checked),
       allow_external_api_requests: Boolean(document.getElementById('allow-external-discovery')?.checked),
       allow_external_discovery: Boolean(document.getElementById('allow-external-discovery')?.checked),
       research_scope_enabled: Boolean(document.getElementById('research-scope-enabled')?.checked),

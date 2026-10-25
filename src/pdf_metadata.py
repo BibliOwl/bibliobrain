@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -645,7 +646,7 @@ def _enrichment_cache_get(lookup_key: str) -> tuple[bool, ZoteroItem | None]:
     if not lookup_key or not db_path.exists():
         return False, None
     try:
-        with _cache_lock, sqlite3.connect(db_path, timeout=2.0) as conn:
+        with _cache_lock, contextlib.closing(sqlite3.connect(db_path, timeout=2.0)) as conn, conn:
             conn.execute(_ENRICHMENT_CACHE_SCHEMA)
             row = conn.execute(
                 """
@@ -678,7 +679,7 @@ def _enrichment_cache_put(lookup_key: str, item: ZoteroItem | None) -> None:
     )
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        with _cache_lock, sqlite3.connect(db_path, timeout=2.0) as conn:
+        with _cache_lock, contextlib.closing(sqlite3.connect(db_path, timeout=2.0)) as conn, conn:
             conn.execute(_ENRICHMENT_CACHE_SCHEMA)
             conn.execute(
                 """
@@ -810,7 +811,7 @@ def _persistent_cache_get(full_path: str, file_size: int, modified_ns: int) -> Z
     if not db_path.exists():
         return None
     try:
-        with _cache_lock, sqlite3.connect(db_path, timeout=2.0) as conn:
+        with _cache_lock, contextlib.closing(sqlite3.connect(db_path, timeout=2.0)) as conn, conn:
             row = conn.execute(
                 """
                 SELECT payload FROM pdf_metadata_cache
@@ -841,7 +842,7 @@ def _persistent_cache_put(
     db_path = _persistent_cache_path()
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        with _cache_lock, sqlite3.connect(db_path, timeout=2.0) as conn:
+        with _cache_lock, contextlib.closing(sqlite3.connect(db_path, timeout=2.0)) as conn, conn:
             conn.execute(_CACHE_SCHEMA)
             conn.execute(
                 """

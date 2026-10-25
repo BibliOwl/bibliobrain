@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config
+from src.atomic_io import atomic_write_text
 from src.prompts import ANALYSIS_PROMPTS, ANALYSIS_PROMPTS_EN, get_response_language_instruction
 
 _logger = logging.getLogger(__name__)
@@ -69,12 +70,9 @@ def _read_overrides() -> dict[str, str]:
 
 
 def _write_overrides(overrides: dict[str, str]) -> None:
-    _PROMPTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {"prompts": dict(sorted(overrides.items()))}
-    _PROMPTS_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    # Atomic: a crash mid-write must not leave the user's prompts truncated.
+    atomic_write_text(_PROMPTS_PATH, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
 def list_analysis_types() -> list[str]:

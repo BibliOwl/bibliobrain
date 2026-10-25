@@ -4891,3 +4891,40 @@ def test_progressive_article_discovery_streams_progress_preliminary_then_done(
     assert "Draft ranking" in body and "Validated ranking" in body
     assert '"history_id"' in body
     assert budgets == [discovery_routes._PROGRESSIVE_DISCOVERY_BUDGET_SECONDS]
+
+
+def test_a_stopped_literature_review_keeps_its_partial_answer(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    storage_dir = workspace_tmp_dir / "storage"
+    data_dir = workspace_tmp_dir / "data"
+    app_api = _load_app_api_module(storage_dir, data_dir)
+
+    import src.api.chat as chat_api
+    import src.rag.literature_review as literature_review
+
+    def stopped_review(*_args: Any, **_kwargs: Any):
+        yield {"type": "token", "text": "Première partie de la revue"}
+        raise InterruptedError("user_stop")
+
+    saved: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(literature_review, "stream_literature_review", stopped_review)
+    monkeypatch.setattr(
+        chat_api,
+        "add_chat_message",
+        lambda _chat_id, role, text, **kwargs: saved.append((role, text, kwargs.get("meta") or {})),
+    )
+    client = TestClient(app_api.app)
+    with client.stream(
+        "POST",
+        "/api/literature-review",
+        json={"message": "revue sur les pertes AC", "model": "demo-model", "threshold": 0.25},
+    ) as response:
+        "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assistant = [entry for entry in saved if entry[0] == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0][1].startswith("Première partie de la revue")
+    assert assistant[0][2]["interrupted"] is True
+    assert assistant[0][2]["mode"] == "literature_review"

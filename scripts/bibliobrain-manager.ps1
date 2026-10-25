@@ -64,6 +64,13 @@ $ZipPackageMarker = "ZIP-PACKAGE.txt"
 $ZipPackageRoot = "Bibliobrain"
 $PythonExe = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $BackupModule = "src.backup_restore"
+# 7860 is also the default port of Gradio and Stable Diffusion WebUI. When
+# another program holds it, Bibliobrain takes the next free port up to 7870 and
+# remembers it, so the browser keeps the same address (and its saved state).
+$DefaultPort = 7860
+$FallbackPorts = 7861..7870
+$PortPath = Join-Path $StateDir "server.port"
+$script:AppPort = $DefaultPort
 $AppUrl = "http://127.0.0.1:7860/api/capabilities"
 $BrowserUrl = "http://localhost:7860"
 $StartupTimeoutSeconds = 180
@@ -204,10 +211,42 @@ function Get-ManagedServerProcess {
     return Get-Process -Id $serverPid -ErrorAction SilentlyContinue
 }
 
+function Set-AppPort {
+    param([int]$Port)
+    $script:AppPort = $Port
+    $script:AppUrl = "http://127.0.0.1:$Port/api/capabilities"
+    $script:BrowserUrl = "http://localhost:$Port"
+}
+
+function Get-SavedAppPort {
+    if (-not (Test-Path -LiteralPath $PortPath -PathType Leaf)) {
+        return $DefaultPort
+    }
+    $saved = 0
+    $text = [string](Get-Content -Raw -LiteralPath $PortPath -ErrorAction SilentlyContinue)
+    if ([int]::TryParse($text.Trim(), [ref]$saved) -and ($saved -eq $DefaultPort -or $FallbackPorts -contains $saved)) {
+        return $saved
+    }
+    return $DefaultPort
+}
+
+function Select-FreeAppPort {
+    # The last port used first, so the address does not change between starts.
+    # Returns 0 when every candidate is taken.
+    $candidates = @(Get-SavedAppPort) + @($DefaultPort) + @($FallbackPorts) | Select-Object -Unique
+    foreach ($candidate in $candidates) {
+        if (-not (Get-PortOwnerDescription -Port $candidate)) {
+            return [int]$candidate
+        }
+    }
+    return 0
+}
+
 function Get-PortOwnerDescription {
     # Other local web applications use port 7860 too. Empty when it is free.
+    param([int]$Port = $script:AppPort)
     try {
-        $listener = Get-NetTCPConnection -LocalPort 7860 -State Listen -ErrorAction Stop |
+        $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
             Select-Object -First 1
     }
     catch {
@@ -287,23 +326,31 @@ function Start-Bibliobrain {
 
     New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
     $BindHost = "127.0.0.1"
+    # A server already running answers on the port it was given last time.
+    Set-AppPort -Port (Get-SavedAppPort)
 
     if (-not (Test-BibliobrainReady)) {
         # A server that is still loading (or too busy to answer in two seconds)
         # must be waited for, not doubled by a second one fighting for the port.
         $process = Get-ManagedServerProcess
         if (-not $process) {
-            $portOwner = Get-PortOwnerDescription
-            if ($portOwner) {
-                throw "Bibliobrain cannot start: port 7860 is already used by $portOwner. Close that program, then start Bibliobrain again."
+            $freePort = Select-FreeAppPort
+            if (-not $freePort) {
+                $portOwner = Get-PortOwnerDescription -Port $DefaultPort
+                throw "Bibliobrain cannot start: port 7860 is already used by $portOwner, and ports 7861 to 7870 are taken too. Close that program, then start Bibliobrain again."
             }
+            if ($freePort -ne $DefaultPort) {
+                Write-Host "Port $DefaultPort is busy: Bibliobrain uses port $freePort." -ForegroundColor Yellow
+            }
+            Set-AppPort -Port $freePort
+            Set-Content -LiteralPath $PortPath -Value ([string]$freePort) -Encoding ASCII
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
             try {
                 # Console output is captured for crash diagnostics only; the durable,
                 # rotating application log is written by the server itself under $LogDir.
                 $process = Start-Process `
                     -FilePath $PythonExe `
-                    -ArgumentList @("-m", "src.managed_server", "--host", $BindHost, "--port", "7860") `
+                    -ArgumentList @("-m", "src.managed_server", "--host", $BindHost, "--port", ([string]$script:AppPort)) `
                     -WorkingDirectory $RepoRoot `
                     -WindowStyle Hidden `
                     -RedirectStandardOutput (Join-Path $LogDir "server.out.log") `

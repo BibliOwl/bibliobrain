@@ -7,6 +7,7 @@ slide).  The RAG pipeline remains format-agnostic after this extraction step.
 from __future__ import annotations
 
 import html
+import logging
 import os
 import posixpath
 import re
@@ -20,6 +21,8 @@ from xml.etree import ElementTree as ET
 
 from src.document_guard import DocumentRejected, check_document
 from src.zotero_db import ZoteroItem, lookup_zotero_item
+
+_logger = logging.getLogger(__name__)
 
 SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
     {
@@ -275,6 +278,27 @@ def _read_text(path: Path) -> str:
     return _normalize_text(payload.decode("utf-8", errors="replace"))
 
 
+def _page_text_or_empty(page, number: int, path: str) -> str:
+    """One page's text, or "" when pypdf refuses that page.
+
+    pypdf caps the work spent on a content stream (``LimitReachedError``
+    "maximum number of tokens per stream" since 6.21): a single page holding a
+    huge vector figure used to fail the whole document, which then never
+    reached the index and came back as "new" on every reload.
+    """
+    try:
+        return str(page.extract_text(extraction_mode="plain") or "").strip()
+    except Exception as exc:  # pypdf raises many types for one bad page
+        _logger.warning(
+            "Page %d of %s skipped: %s: %s",
+            number + 1,
+            os.path.basename(path),
+            type(exc).__name__,
+            exc,
+        )
+        return ""
+
+
 class PypdfLoader:
     """Page texts exactly as langchain's ``PyPDFLoader`` yields them.
 
@@ -293,12 +317,19 @@ class PypdfLoader:
             reader = PdfReader(handle)
             for number, page in enumerate(reader.pages):
                 yield SimpleNamespace(
-                    page_content=str(page.extract_text(extraction_mode="plain") or "").strip(),
+                    page_content=_page_text_or_empty(page, number, self.path),
                     metadata={"page": number},
                 )
 
     def load(self) -> list:
         return list(self.lazy_load())
+
+
+def _load_pdf_pages(loader, max_units: int | None) -> list:
+    lazy_load = getattr(loader, "lazy_load", None)
+    if max_units and callable(lazy_load):
+        return list(islice(lazy_load(), max_units))
+    return loader.load()
 
 
 def _pdf_units(
@@ -312,12 +343,14 @@ def _pdf_units(
 
         loader_class = PyPDFLoader
 
-    loader = loader_class(str(path))
-    lazy_load = getattr(loader, "lazy_load", None)
-    if max_units and callable(lazy_load):
-        pages = list(islice(lazy_load(), max_units))
-    else:
-        pages = loader.load()
+    try:
+        pages = _load_pdf_pages(loader_class(str(path)), max_units)
+    except Exception as exc:
+        # langchain's PyPDFLoader stops at the first page pypdf refuses; read
+        # the file again page by page so only that page is lost.
+        if loader_class is PypdfLoader or not type(exc).__module__.startswith("pypdf"):
+            raise
+        pages = _load_pdf_pages(PypdfLoader(str(path)), max_units)
     return [
         DocumentUnit(
             text=_normalize_text(page.page_content),

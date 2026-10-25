@@ -235,6 +235,15 @@ function _ragDetailView() {
     });
   }
   const shown = plan?.full_rebuild_required ? [] : files.slice(0, 6);
+  // Files that could not be read keep their earlier chunks (if any) and are
+  // not offered again until they change or the app is updated.
+  const failed = (Array.isArray(_ragRefreshPreview?.failed_files) ? _ragRefreshPreview.failed_files : [])
+    .map((entry) => {
+      const name = String(entry?.rel_path || '').split(/[\\/]/).pop();
+      const reason = String(entry?.reason || '');
+      return { change: 'failed', text: name, title: reason ? `${name} — ${reason}` : name };
+    });
+  const failedShown = failed.slice(0, 6);
   const pending = busy ? null : _ragPendingChanges();
   const actions = [];
   if (busy && _ragLoadContext.streaming) {
@@ -284,6 +293,14 @@ function _ragDetailView() {
         items: shown,
         more: files.length > shown.length && shown.length
           ? _ti('library.ragDetailMore', { count: files.length - shown.length })
+          : '',
+      },
+      {
+        term: _ti('library.ragDetailFailed'),
+        value: failed.length ? _ti('library.ragDetailFailedCount', { n: formatCount(failed.length) }) : '',
+        items: failedShown,
+        more: failed.length > failedShown.length
+          ? _ti('library.ragDetailMore', { count: failed.length - failedShown.length })
           : '',
       },
     ],

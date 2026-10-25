@@ -221,8 +221,9 @@
   }
   // One sidebar pill shows the work that matters most (setStatusTask in
   // app.js). A running OCR is 'working' (pause it from the card); an
-  // interrupted one needs the user (Resume in the pill); a paused one only
-  // appears in the card, with its resume action.
+  // interrupted one needs the user (Resume in the pill), unless other work
+  // is in progress: then that work keeps the pill and the OCR waits in "+N";
+  // a paused one only appears in the card, with its resume action.
   function renderOcrStatus(data) {
     if (typeof setStatusTask !== 'function' || typeof activitySet !== 'function') return;
     const shown = Boolean(data?.settings?.enabled && pillLabels[data.status]);
@@ -245,6 +246,7 @@
       title: currentPage(data) || label,
       percent,
       action: tone === 'needs' ? { label: tr('resume'), onClick: toggleOcrPause } : null,
+      yieldsToWork: true,
       view: detailView,
     });
     if (data.active) {

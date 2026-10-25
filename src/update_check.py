@@ -270,24 +270,37 @@ def _download_asset(asset: dict[str, Any], filename: str) -> Path:
     partial = target.with_name(target.name + ".part")
     expected_size = int(asset.get("size") or 0)
     limit = expected_size or MAX_INSTALLER_BYTES
+    # The package, then the update unpacks it and keeps a backup: ask for
+    # three times its size so it does not stop half-way on a full disk.
+    free_bytes = shutil.disk_usage(target_dir).free
+    if free_bytes < limit * 3:
+        raise ManifestError(
+            f"Not enough free disk space for the update: {free_bytes // 1_000_000} MB free, "
+            f"{limit * 3 // 1_000_000} MB needed"
+        )
     digest = hashlib.sha256()
     received = 0
-    with httpx.Client(
-        timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, read=60.0),
-        follow_redirects=True,
-        headers={"User-Agent": USER_AGENT},
-    ) as client:
-        with client.stream("GET", asset["url"]) as response:
-            response.raise_for_status()
-            with open(partial, "wb") as handle:
-                for chunk in response.iter_bytes(256 * 1024):
-                    received += len(chunk)
-                    if received > limit:
-                        raise ManifestError("The download is larger than announced")
-                    digest.update(chunk)
-                    handle.write(chunk)
-                    if expected_size:
-                        _set_job(percent=min(99, int(received * 100 / expected_size)))
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS, read=60.0),
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        ) as client:
+            with client.stream("GET", asset["url"]) as response:
+                response.raise_for_status()
+                with open(partial, "wb") as handle:
+                    for chunk in response.iter_bytes(256 * 1024):
+                        received += len(chunk)
+                        if received > limit:
+                            raise ManifestError("The download is larger than announced")
+                        digest.update(chunk)
+                        handle.write(chunk)
+                        if expected_size:
+                            _set_job(percent=min(99, int(received * 100 / expected_size)))
+    except BaseException:
+        # A cut connection must not leave a partial package behind.
+        partial.unlink(missing_ok=True)
+        raise
     _set_job(phase="verifying", percent=None)
     if expected_size and received != expected_size:
         partial.unlink(missing_ok=True)

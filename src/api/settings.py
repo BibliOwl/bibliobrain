@@ -114,6 +114,7 @@ def api_set_app_settings(req: AppSettingsRequest):
         research_scope_enabled=req.research_scope_enabled,
         discovery_query_planner=req.discovery_query_planner,
         discovery_dense_enabled=req.discovery_dense_enabled,
+        index_standalone_pdfs=req.index_standalone_pdfs,
         discovery_candidate_multiplier=req.discovery_candidate_multiplier,
         discovery_llm_validation_multiplier=req.discovery_llm_validation_multiplier,
         unpaywall_email=req.unpaywall_email,

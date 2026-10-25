@@ -3,7 +3,7 @@ import os
 import warnings
 from pathlib import Path
 
-from src.machine_config import MachineConfigError, activate_machine_settings
+from src.machine_config import MachineConfigError, activate_machine_settings, application_root
 
 # Persistent non-secret configuration is loaded from the fixed per-user JSON
 # file before paths and providers are resolved. Bibliobrain no longer loads a
@@ -32,8 +32,29 @@ _DEFAULT_CHROMA_DIRNAME = "chroma"
 _LEGACY_CHROMA_DIRNAME = "chroma_db_zotero"
 
 
+# A relative path in the configuration (the old .env used "./chroma_db_zotero")
+# used to depend on the folder Bibliobrain was started from: started from a
+# branch worktree or a shortcut, it built a new, empty index there. It is now
+# read relative to the application folder, where the .env it came from lived
+# (the main checkout when running from a git worktree).
+_APP_ROOT = application_root()
+
+
 def _env_path(name: str) -> str:
-    return str(os.getenv(name, "") or "").strip()
+    value = str(os.getenv(name, "") or "").strip()
+    if not value:
+        return ""
+    expanded = os.path.expandvars(os.path.expanduser(value))
+    if os.path.isabs(expanded):
+        return expanded
+    resolved = str((_APP_ROOT / expanded).resolve())
+    logging.getLogger(__name__).info(
+        "%s is a relative path (%s): using %s. Set an absolute path to be explicit.",
+        name,
+        value,
+        resolved,
+    )
+    return resolved
 
 
 def _resolve_app_home() -> str:

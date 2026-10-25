@@ -17,7 +17,7 @@ from src.analysis_prompts import (
     get_analysis_prompt,
     list_analysis_types,
 )
-from src.app_settings import get_app_settings
+from src.app_settings import get_app_settings, index_standalone_pdfs_enabled
 from src.config import set_data_path, set_zotero_path
 from src.document_formats import load_document_units, resolve_document_metadata
 from src.file_access import resolve_document_path
@@ -463,7 +463,7 @@ def init_zotero(db_path: str = "") -> str:
 
     try:
         load_zotero_library.cache_clear()
-        _zotero_library = load_zotero_library(db_path, zotero_drops.fingerprints())
+        _zotero_library = load_zotero_library(db_path, zotero_drops.fingerprints(), index_standalone_pdfs_enabled())
         _zotero_db_path = db_path
         set_zotero_path(db_path)
         entry_count = len(
@@ -653,6 +653,64 @@ def get_zotero_facets() -> dict:
             "collections": len(collections),
         },
     }
+
+
+_LIBRARY_MATCH_TITLE_SIMILARITY = 0.93
+
+
+def match_library_papers(papers: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The library PDF of each paper found online, by DOI then by title.
+
+    A notebook only takes papers that are in the library. The library title
+    of a PDF outside Zotero comes from the PDF's own metadata or first page,
+    so titles are compared loosely (accents, case, punctuation, a few words)
+    and the DOI, when both sides have one, decides first.
+    """
+    from src.pdf_metadata import _normalized_doi, _normalized_match_text, _title_similarity
+
+    entries = filter_active_zotero_pdf_entries(
+        find_pdfs(),
+        _zotero_library,
+        data_path=config.DATA_PATH,
+        zotero_db_path=config.ZOTERO_DB_PATH,
+    )
+    by_doi: dict[str, str] = {}
+    by_title: dict[str, str] = {}
+    titled: list[tuple[str, str]] = []
+    for rel_path, full_path in entries:
+        item = _lookup_zotero(rel_path, full_path)
+        if item is None:
+            continue
+        doi = _normalized_doi(item.doi)
+        if doi:
+            by_doi.setdefault(doi, rel_path)
+        title = _normalized_match_text(item.title)
+        if title:
+            by_title.setdefault(title, rel_path)
+            titled.append((item.title, rel_path))
+
+    matches: list[dict[str, str]] = []
+    for paper in papers:
+        doi = _normalized_doi(paper.get("doi"))
+        title = str(paper.get("title") or "")
+        if doi and doi in by_doi:
+            matches.append({"rel_path": by_doi[doi], "matched_by": "doi"})
+            continue
+        exact = by_title.get(_normalized_match_text(title))
+        if exact:
+            matches.append({"rel_path": exact, "matched_by": "title"})
+            continue
+        best_path, best_score = "", 0.0
+        if len(_normalized_match_text(title)) >= 20:
+            for library_title, rel_path in titled:
+                score = _title_similarity(title, library_title)
+                if score > best_score:
+                    best_path, best_score = rel_path, score
+        if best_score >= _LIBRARY_MATCH_TITLE_SIMILARITY:
+            matches.append({"rel_path": best_path, "matched_by": "similar_title"})
+        else:
+            matches.append({"rel_path": "", "matched_by": ""})
+    return matches
 
 
 def get_library_filter_metadata(paths: list[str]) -> list[dict[str, Any]]:

@@ -476,6 +476,12 @@ def test_double_click_entrypoint_and_maintenance_manager_exist() -> None:
     assert "function Get-ManagedServerProcess" in manager
     assert "function Get-PortOwnerDescription" in manager
     assert "port 7860 is already used by $portOwner" in manager
+    # A busy 7860 (Gradio, Stable Diffusion WebUI) moves Bibliobrain to the
+    # next free port, remembered for the next start.
+    assert "$FallbackPorts = 7861..7870" in manager
+    assert "function Select-FreeAppPort" in manager
+    assert "Set-AppPort -Port (Get-SavedAppPort)" in manager
+    assert '"--port", ([string]$script:AppPort)' in manager
     assert "$StartupTimeoutSeconds = 180" in manager
     assert "Wait-Process -Id $serverPid -Timeout 10" in manager
 

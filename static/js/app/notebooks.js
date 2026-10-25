@@ -518,6 +518,35 @@ function openNbSourceInLibrary(event) {
   goToSource(path);
 }
 
+function _nbSourcePaperUrl(source) {
+  const text = String(source?.content_preview ?? source?.content ?? '');
+  const match = text.match(/https?:\/\/[^\s<>"')]+/);
+  return match ? match[0].replace(/[.,;]+$/, '') : '';
+}
+
+// What the chat reads of each source: the full text of a library PDF, or only
+// the text of a source typed or pasted by hand.
+function _nbSourceStatusHtml(source) {
+  const sourcePath = String(source?.source_path || '').trim();
+  return sourcePath
+    ? `<div class="nb-source-status is-pdf">${escapeHtml(_ti('notebooks.statusPdf'))}</div>`
+    : `<div class="nb-source-status is-text">${escapeHtml(_ti('notebooks.statusTextOnly'))}</div>`;
+}
+
+function _nbSourceActionsHtml(source) {
+  const sourcePath = String(source?.source_path || '').trim();
+  const buttons = [];
+  if (sourcePath) {
+    buttons.push(`<button type="button" class="nb-source-item-open is-primary" data-source-path="${escapeAttr(sourcePath)}" data-source-title="${escapeAttr(source.title || sourcePath)}" ${bindBbHandler('click', function(event) { openNbArticleViewer(event); })}>${escapeHtml(_tr('Lire ici'))}</button>`);
+    buttons.push(`<button type="button" class="nb-source-item-open" data-source-path="${escapeAttr(sourcePath)}" ${bindBbHandler('click', function(event) { openNbSourceInLibrary(event); })}>${escapeHtml(_tr('Bibliothèque'))}</button>`);
+  }
+  const paperUrl = sourcePath ? '' : _nbSourcePaperUrl(source);
+  if (paperUrl) {
+    buttons.push(`<a class="nb-source-item-open" href="${escapeAttr(paperUrl)}" target="_blank" rel="noopener">${escapeHtml(_ti('notebooks.viewPaper'))}</a>`);
+  }
+  return buttons.length ? `<div class="nb-source-item-actions">${buttons.join('')}</div>` : '';
+}
+
 function _renderNbSources() {
   const sources = _nb.data.sources || [];
   const created = new Date(_nb.data.created).toLocaleDateString('fr-FR', {day:'numeric',month:'long',year:'numeric'});
@@ -538,29 +567,20 @@ function _renderNbSources() {
     return;
   }
   list.innerHTML = sources.map((s, index) => {
-    const sourcePath = String(s?.source_path || '').trim();
     const sourcePreview = String(s?.content_preview ?? s?.content ?? '');
     const snippetText = sourcePreview.length > 120 ? sourcePreview.slice(0, 120) : sourcePreview;
     const isTruncated = Boolean(s?.content_truncated) || sourcePreview.length > snippetText.length;
     const refLabel = sourceRefLabel(s, index + 1);
-    const openLibraryBtn = sourcePath
-      ? `<div class="nb-source-item-actions">
-          <button type="button" class="nb-source-item-open is-primary" data-source-path="${escapeAttr(sourcePath)}" data-source-title="${escapeAttr(s.title || sourcePath)}" ${bindBbHandler('click', function(event) { openNbArticleViewer(event); })}>
-            ${escapeHtml(_tr('Lire ici'))}
-          </button>
-          <button type="button" class="nb-source-item-open" data-source-path="${escapeAttr(sourcePath)}" ${bindBbHandler('click', function(event) { openNbSourceInLibrary(event); })}>
-            ${escapeHtml(_tr('Bibliothèque'))}
-          </button>
-        </div>`
-      : '';
+    const sourceActions = _nbSourceActionsHtml(s);
     return `
     <div class="nb-source-item" data-source-label="${escapeAttr(refLabel)}">
       <div class="nb-source-item-head">
         <span class="nb-source-ref-badge">${escapeHtml(refLabel)}</span>
         <div class="nb-source-item-title">${escapeHtml(s.title)}</div>
       </div>
+      ${_nbSourceStatusHtml(s)}
       <div class="nb-source-item-snippet">${escapeHtml(snippetText)}${isTruncated ? '...' : ''}</div>
-      ${openLibraryBtn}
+      ${sourceActions}
       <button class="nb-source-item-del" ${bindBbHandler('click', function() { removeNbSource(s.id); })} title="Supprimer" aria-label="Supprimer">&times;</button>
     </div>`;
   }).join('');

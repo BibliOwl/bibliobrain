@@ -44,3 +44,14 @@ def test_uvicorn_access_filter_removes_the_entire_query_string() -> None:
     assert isinstance(record.args, tuple)
     assert record.args[2] == "/"
     assert "shared-secret" not in record.getMessage()
+
+
+def test_a_fallback_port_is_an_allowed_origin(monkeypatch) -> None:
+    from src.http_security import parse_allowed_origins
+
+    monkeypatch.setenv("BIBLIOBRAIN_PORT", "7862")
+    allowed = parse_allowed_origins("http://localhost:7860,http://127.0.0.1:7860")
+    assert "http://localhost:7862" in allowed
+    assert "http://127.0.0.1:7862" in allowed
+    monkeypatch.setenv("BIBLIOBRAIN_PORT", "7860")
+    assert parse_allowed_origins("http://localhost:7860") == ["http://localhost:7860"]

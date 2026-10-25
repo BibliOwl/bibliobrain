@@ -12,6 +12,29 @@ def _use_storage(monkeypatch, workspace_tmp_dir):
     return storage_dir
 
 
+def _skip_other_histories(monkeypatch) -> None:
+    """Leave the chat, notebook, export and discovery stores out of a reset.
+
+    Their modules keep the storage path they were imported or reloaded with;
+    after another test reloads them on a temporary folder that is now gone,
+    the reset failed with "no such table: searches". This file only tests
+    the drafting history.
+    """
+    endpoint = next(
+        route.endpoint
+        for route in app_api.app.routes
+        if getattr(route, "path", "") == "/api/reset-history"
+    )
+    stubs = {
+        "clear_all_notebooks": lambda: 0,
+        "clear_all_chat_history": lambda: {"conversations_deleted": 0},
+        "clear_all_export_files": lambda: {"files_deleted": 0},
+        "clear_all_discovery_history": lambda: {"searches_deleted": 0},
+    }
+    for name, stub in stubs.items():
+        monkeypatch.setitem(endpoint.__globals__, name, stub)
+
+
 def test_run_update_keeps_date_and_excerpt(monkeypatch, workspace_tmp_dir) -> None:
     _use_storage(monkeypatch, workspace_tmp_dir)
     client = TestClient(app_api.app)
@@ -123,6 +146,7 @@ def test_settings_history_reset_clears_drafting_history_but_keeps_draft(
     monkeypatch, workspace_tmp_dir
 ) -> None:
     _use_storage(monkeypatch, workspace_tmp_dir)
+    _skip_other_histories(monkeypatch)
     client = TestClient(app_api.app)
     client.put("/api/drafting-document", json={"html": "<p>Brouillon en cours</p>"})
     client.put("/api/drafting-history/runs/run-00000003", json={"kind": "proofread"})

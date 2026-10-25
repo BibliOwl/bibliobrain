@@ -13,11 +13,17 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
+import tempfile
+import time
 from dataclasses import asdict, dataclass, field, fields
 from functools import cache, lru_cache
 from html import unescape
+from pathlib import Path
 from typing import Any
+
+from src.atomic_io import atomic_write_json
 
 _logger = logging.getLogger(__name__)
 
@@ -520,13 +526,7 @@ def _item_from_snapshot(data: dict[str, Any]) -> ZoteroItem:
 def write_metadata_snapshot(path: str, items: dict[str, dict[str, Any]], *, origin: str = "") -> None:
     """Write records keyed by document path; the format marker comes first."""
     payload = {"format": METADATA_SNAPSHOT_FORMAT, "format_version": 1, "origin": origin, "items": items}
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    temporary = f"{path}.tmp"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False)
-    os.replace(temporary, path)
+    atomic_write_json(Path(path), payload, indent=None)
 
 
 def snapshot_items(payload: Any) -> dict[str, ZoteroItem]:
@@ -1111,13 +1111,15 @@ def _dropped_standalone_pdfs(
     db_path: str,
     dropped_pdfs: frozenset[tuple[int, str]],
     date_added_column: bool,
+    *,
+    include_all: bool = False,
 ) -> list[dict]:
     """Standalone PDF attachments holding a PDF dropped into Bibliobrain.
 
-    Zotero keeps a PDF it found no record for as a standalone attachment. Only
-    the ones whose ``(size, sha256)`` is in ``dropped_pdfs`` are returned, so
-    a renamed file is still found and any other standalone PDF stays out of
-    the index. Each row stands in for its own parent item.
+    Zotero keeps a PDF it found no record for as a standalone attachment.
+    With ``include_all`` every one of them is returned; otherwise only those
+    whose ``(size, sha256)`` is in ``dropped_pdfs``, so a renamed file is
+    still found. Each row stands in for its own parent item.
     """
     storage = find_zotero_storage(db_path)
     if not storage:
@@ -1148,6 +1150,10 @@ def _dropped_standalone_pdfs(
     for row in cur.fetchall():
         name = os.path.basename(row["attachment_path"][len("storage:"):].strip())
         path = os.path.join(storage, row["attachment_key"] or "", name)
+        if include_all:
+            if os.path.isfile(path):
+                found.append({**dict(row), "standalone": True})
+            continue
         try:
             # Only a file of a remembered size is read through.
             size = os.path.getsize(path)
@@ -1160,7 +1166,9 @@ def _dropped_standalone_pdfs(
 
 @lru_cache(maxsize=4)
 def load_zotero_library(
-    db_path: str, dropped_pdfs: frozenset[tuple[int, str]] = frozenset()
+    db_path: str,
+    dropped_pdfs: frozenset[tuple[int, str]] = frozenset(),
+    include_standalone: bool = False,
 ) -> dict[str, ZoteroItem]:
     """
     Loads all Zotero items that have a PDF attachment.
@@ -1178,7 +1186,44 @@ def load_zotero_library(
         return _load_bibtex_library(str(db_path).strip())
 
     try:
-        conn = _open_db(db_path)
+        return _load_zotero_sqlite_library(db_path, dropped_pdfs, include_standalone)
+    except sqlite3.DatabaseError as exc:
+        # The database is read as immutable so that a running Zotero, which
+        # keeps it locked, does not block us. While Zotero writes (a sync, an
+        # import), that read can meet half-written pages. Read a copy taken a
+        # moment later instead.
+        _logger.warning("Zotero database read failed (%s); retrying from a copy", exc)
+    time.sleep(_ZOTERO_RETRY_DELAY_SECONDS)
+    with tempfile.TemporaryDirectory(prefix="bibliobrain-zotero-") as folder:
+        copy_path = os.path.join(folder, "zotero.sqlite")
+        try:
+            shutil.copyfile(_validate_sqlite_path(db_path), copy_path)
+            return _load_zotero_sqlite_library(
+                db_path, dropped_pdfs, include_standalone, read_path=copy_path
+            )
+        except (OSError, sqlite3.DatabaseError) as exc:
+            raise RuntimeError(
+                "Zotero is writing to its database (a sync may be running). "
+                "Wait a moment, then retry."
+            ) from exc
+
+
+_ZOTERO_RETRY_DELAY_SECONDS = 1.0
+
+
+def _load_zotero_sqlite_library(
+    db_path: str,
+    dropped_pdfs: frozenset[tuple[int, str]],
+    include_standalone: bool = False,
+    *,
+    read_path: str | None = None,
+) -> dict[str, ZoteroItem]:
+    """Read the library of ``db_path``, from ``read_path`` when given (a copy).
+
+    Paths to the attachments are always resolved next to ``db_path``.
+    """
+    try:
+        conn = _open_db(read_path or db_path)
         cur = conn.cursor()
     except sqlite3.OperationalError as exc:
         msg = str(exc).lower()
@@ -1188,6 +1233,8 @@ def load_zotero_library(
                 "Please close Zotero and retry."
             ) from exc
         raise RuntimeError(f"Impossible to open zotero.sqlite: {exc}") from exc
+    except sqlite3.DatabaseError:
+        raise
     except Exception as exc:
         raise RuntimeError(f"Impossible to open zotero.sqlite: {exc}") from exc
 
@@ -1223,9 +1270,15 @@ def load_zotero_library(
             """
         )
         attachments = [dict(row) for row in cur.fetchall()]
-        if dropped_pdfs:
+        if dropped_pdfs or include_standalone:
             attachments.extend(
-                _dropped_standalone_pdfs(cur, db_path, dropped_pdfs, "dateAdded" in item_columns)
+                _dropped_standalone_pdfs(
+                    cur,
+                    db_path,
+                    dropped_pdfs,
+                    "dateAdded" in item_columns,
+                    include_all=include_standalone,
+                )
             )
         if not attachments:
             return {}
@@ -1417,7 +1470,8 @@ def load_zotero_library(
         title = field_data.get("title", "")
         if standalone:
             # Zotero titles it after the file: the name without ".pdf" reads better.
-            title = re.sub(r"\.pdf$", "", title or os.path.basename(attachment_path), flags=re.I)
+            file_name = os.path.basename(re.sub(r"^storage:", "", attachment_path))
+            title = re.sub(r"\.pdf$", "", title or file_name, flags=re.I)
 
         item = ZoteroItem(
             item_id=parent_id,

@@ -38,7 +38,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from src import config, zotero_drops
-from src.app_settings import get_app_settings
+from src.app_settings import get_app_settings, index_standalone_pdfs_enabled
 from src.document_formats import document_index_variant
 from src.llm_provider import (
     current_embedding_profile_label,
@@ -199,7 +199,7 @@ def _metadata_library() -> tuple[str, str, dict[str, ZoteroItem]]:
     if not path or not os.path.exists(path):
         return source, path, {}
     try:
-        return source, path, load_zotero_library(path, zotero_drops.fingerprints())
+        return source, path, load_zotero_library(path, zotero_drops.fingerprints(), index_standalone_pdfs_enabled())
     except Exception:
         _logger.warning("Unable to read the metadata library %s", path, exc_info=True)
         return source, path, {}

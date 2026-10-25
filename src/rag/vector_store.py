@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import hashlib
 import json
@@ -27,6 +28,7 @@ from src.llm_provider import current_embedding_profile_label, required_embedding
 from src.rag_settings import get_persisted_chunk_size
 from src.rel_paths import normalize_rel_path
 from src.unicode_utils import json_dumps_utf8
+from src.version import get_app_version
 from src.visual_analysis import index_visual_signature
 
 from . import state
@@ -493,7 +495,7 @@ def _load_manifest_entries(
             loaded = {str(key): value for key, value in entries.items() if isinstance(value, dict)}
             return _backfill_legacy_chunk_counts(os.path.dirname(path), loaded)
     except Exception:
-        _logger.debug("Recovered from an error in _load_manifest_entries.", exc_info=True)
+        _logger.warning("Recovered from an error in _load_manifest_entries.", exc_info=True)
         return {}
     return {}
 
@@ -519,7 +521,9 @@ def _backfill_legacy_chunk_counts(
         try:
             import sqlite3
 
-            with sqlite3.connect(f"file:{lexical_path}?mode=ro", uri=True, timeout=15.0) as connection:
+            with contextlib.closing(
+                sqlite3.connect(f"file:{lexical_path}?mode=ro", uri=True, timeout=15.0)
+            ) as connection:
                 for rel_path, count in connection.execute(
                     "SELECT rel_path, COUNT(*) FROM lexical_chunks GROUP BY rel_path"
                 ):
@@ -553,7 +557,7 @@ def _load_manifest_chunk_size(
         if isinstance(value, str) and value.isdigit():
             return int(value)
     except Exception:
-        _logger.debug("Recovered from an error in _load_manifest_chunk_size.", exc_info=True)
+        _logger.warning("Recovered from an error in _load_manifest_chunk_size.", exc_info=True)
         return None
     return None
 
@@ -572,7 +576,7 @@ def _load_manifest_embedding_model(
             payload = json.load(handle)
         return str(payload.get("embedding_model") or "").strip()
     except Exception:
-        _logger.debug("Recovered from an error in _load_manifest_embedding_model.", exc_info=True)
+        _logger.warning("Recovered from an error in _load_manifest_embedding_model.", exc_info=True)
         return ""
 
 
@@ -586,7 +590,7 @@ def _load_manifest_embedding_prompts(*, db_path: str | None = None) -> str:
             payload = json.load(handle)
         return str(payload.get("embedding_prompts") or "").strip()
     except Exception:
-        _logger.debug("Recovered from an error in _load_manifest_embedding_prompts.", exc_info=True)
+        _logger.warning("Recovered from an error in _load_manifest_embedding_prompts.", exc_info=True)
         return ""
 
 
@@ -626,9 +630,10 @@ def _save_manifest_entries(
             entry,
             chunk_count=_manifest_chunk_count(entry),
             no_text=_manifest_no_text(entry),
+            failed=_manifest_failure(entry),
         )
         for rel_path, entry in entries.items()
-        if _manifest_chunk_count(entry) > 0 or _manifest_no_text(entry)
+        if _manifest_entry_settled(entry)
     }
     payload = {
         "version": 3,
@@ -733,16 +738,44 @@ def _manifest_no_text(entry: dict[str, Any] | None) -> bool:
     return entry is not None and entry.get("no_text") is True and _manifest_chunk_count(entry) == 0
 
 
-def _manifest_entry_settled(entry: dict[str, Any] | None) -> bool:
-    """Indexed, or read in full without any text (a scan the OCR pass covers).
+def _manifest_failure(entry: dict[str, Any] | None) -> dict[str, str] | None:
+    """The recorded read failure of this file, or None.
 
-    Any other entry without chunks is retried: its read failed or was cut.
+    A failure is only kept for the app version that met it: a newer version
+    may read the file, so it retries it.
     """
-    return _manifest_chunk_count(entry) > 0 or _manifest_no_text(entry)
+    if not entry:
+        return None
+    failure = entry.get("failed")
+    if not isinstance(failure, dict):
+        return None
+    if str(failure.get("version") or "") != get_app_version():
+        return None
+    return {
+        "reason": str(failure.get("reason") or "")[:300],
+        "version": str(failure.get("version") or ""),
+    }
+
+
+def _manifest_entry_settled(entry: dict[str, Any] | None) -> bool:
+    """Indexed, read in full without any text (a scan the OCR pass covers), or
+    already failed with this app version (retried once the file or the app changes).
+
+    Any other entry without chunks is retried: its read was cut.
+    """
+    return (
+        _manifest_chunk_count(entry) > 0
+        or _manifest_no_text(entry)
+        or _manifest_failure(entry) is not None
+    )
 
 
 def _stable_manifest_entry(
-    entry: dict[str, Any], *, chunk_count: int, no_text: bool = False
+    entry: dict[str, Any],
+    *,
+    chunk_count: int,
+    no_text: bool = False,
+    failed: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     stable: dict[str, Any] = {
         "file_sig": str(entry.get("file_sig", "")),
@@ -752,6 +785,11 @@ def _stable_manifest_entry(
     }
     if no_text and stable["chunk_count"] == 0:
         stable["no_text"] = True
+    if failed:
+        stable["failed"] = {
+            "reason": str(failed.get("reason") or "")[:300],
+            "version": str(failed.get("version") or get_app_version()),
+        }
     return stable
 
 
@@ -790,7 +828,15 @@ def _preview_manifest_changes(
         if not zotero_matches:
             metadata_changed_paths.append(rel_path)
 
+    failed_files = [
+        {"rel_path": rel_path, "reason": failure["reason"]}
+        for rel_path in unchanged_paths
+        if (failure := _manifest_failure(previous_entries.get(rel_path))) is not None
+    ]
+
     return {
+        "failed_files": failed_files,
+        "failed_count": len(failed_files),
         "new_paths": new_paths,
         "removed_paths": removed_paths,
         "modified_paths": modified_paths,
@@ -894,6 +940,7 @@ def _index_pdf_groups_with_manifest(
                 cur,
                 chunk_count=_manifest_chunk_count(prev),
                 no_text=_manifest_no_text(prev),
+                failed=_manifest_failure(prev),
             )
             resumed_count += 1
             continue
@@ -929,6 +976,7 @@ def _index_pdf_groups_with_manifest(
         )
 
         textless_paths: set[str] = set()
+        failed_paths: dict[str, str] = {}
         note_chunks, pdf_chunks, pages = _build_chunks_from_pdfs(
             pdf_list=group,
             chunk_size=chunk_size,
@@ -937,11 +985,22 @@ def _index_pdf_groups_with_manifest(
             progress_end=group_mid,
             status_label=read_label,
             textless_paths=textless_paths,
+            failed_paths=failed_paths,
         )
+        # A file that could not be read keeps what it already has in the
+        # index: dropping its chunks would make it vanish from the answers
+        # (and come back as "new" on every reload) until the read works again.
+        failed_keys = {normalize_rel_path(path) for path in failed_paths}
+        if failed_keys:
+            note_chunks = _without_paths(note_chunks, failed_keys)
+            pdf_chunks = _without_paths(pdf_chunks, failed_keys)
         chunks = note_chunks + pdf_chunks
+        replaced_paths = [
+            rel_path for rel_path, _ in group if normalize_rel_path(rel_path) not in failed_keys
+        ]
 
         state._raise_if_vector_load_paused()
-        for rel_path, _ in group:
+        for rel_path in replaced_paths:
             try:
                 target_vectorstore.delete(where={"rel_path": rel_path})
             except Exception as exc:
@@ -962,7 +1021,7 @@ def _index_pdf_groups_with_manifest(
         if index_path:
             replace_lexical_paths(
                 index_path,
-                (rel_path for rel_path, _ in group),
+                replaced_paths,
                 _sanitize_documents(chunks),
             )
 
@@ -975,7 +1034,21 @@ def _index_pdf_groups_with_manifest(
         for rel_path, _ in group:
             cur = current_entries.get(rel_path) or {}
             chunk_count = chunks_by_rel_path.get(normalize_rel_path(rel_path), 0)
-            if chunk_count > 0:
+            if normalize_rel_path(rel_path) in failed_keys:
+                reason = next(
+                    (
+                        text
+                        for path, text in failed_paths.items()
+                        if normalize_rel_path(path) == normalize_rel_path(rel_path)
+                    ),
+                    "",
+                )
+                entries[rel_path] = _stable_manifest_entry(
+                    cur,
+                    chunk_count=_manifest_chunk_count(manifest_entries.get(rel_path)),
+                    failed={"reason": reason, "version": get_app_version()},
+                )
+            elif chunk_count > 0:
                 entries[rel_path] = _stable_manifest_entry(cur, chunk_count=chunk_count)
                 indexed_count += 1
             elif rel_path in textless_paths:
@@ -993,6 +1066,14 @@ def _index_pdf_groups_with_manifest(
         processed_count = group_end_count
 
     return entries, resumed_count, indexed_count, page_count, note_chunk_count, pdf_chunk_count
+
+
+def _without_paths(chunks: list[Document], rel_paths: set[str]) -> list[Document]:
+    return [
+        chunk
+        for chunk in chunks
+        if normalize_rel_path(str((chunk.metadata or {}).get("rel_path") or "")) not in rel_paths
+    ]
 
 
 def _merge_filter_maps(

@@ -15,6 +15,7 @@ import threading
 from pathlib import Path
 
 from src import config
+from src.atomic_io import atomic_write_text
 
 _logger = logging.getLogger(__name__)
 
@@ -45,10 +46,7 @@ def remember(pdf: Path, filename: str, sha256: str) -> None:
             return
         entries.append({"sha256": sha256, "size": size, "filename": filename})
         registry = _registry()
-        registry.parent.mkdir(parents=True, exist_ok=True)
-        draft = registry.with_suffix(".tmp")
-        draft.write_text(json.dumps(entries, ensure_ascii=False, indent=1), encoding="utf-8")
-        draft.replace(registry)
+        atomic_write_text(registry, json.dumps(entries, ensure_ascii=False, indent=1))
 
 
 def fingerprints() -> frozenset[tuple[int, str]]:

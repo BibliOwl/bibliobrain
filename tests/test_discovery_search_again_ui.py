@@ -34,7 +34,8 @@ def test_results_can_be_selected_in_bulk_and_added_to_a_notebook() -> None:
     assert "compare.disabled = selected.size < 2 || selected.size > 4;" in WORKSPACES_JS
     assert "addDiscoveryResultsToNotebook([...discoveryRefinement.selected])" in WORKSPACES_JS
     # Text sources only: the full text is never downloaded.
-    assert "/sources`" in DISCOVERY_JS and "'discovery.sourceAbstractOnly'" in DISCOVERY_JS
+    # Only papers of the library enter a notebook, as their PDF.
+    assert "/sources`" in DISCOVERY_JS and "source_path: path" in DISCOVERY_JS
 
 
 def test_each_result_quotes_its_matching_passage_and_offers_similar() -> None:

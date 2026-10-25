@@ -20,6 +20,9 @@ def main() -> None:
 
     require_safe_bind_host(args.host)
     os.environ["BIBLIOBRAIN_MANAGED_SERVER"] = "1"
+    # The manager may pick another port when 7860 is taken: the origin check
+    # has to accept the page served from that port.
+    os.environ["BIBLIOBRAIN_PORT"] = str(args.port)
     configure_logging(LOG_DIR)
     # log_config=None keeps Uvicorn on the root handlers installed above, so the
     # access and error logs land in the rotating file as well as on the console.

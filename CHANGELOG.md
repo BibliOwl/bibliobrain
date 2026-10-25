@@ -18,6 +18,58 @@ dépôt. Elle est lue par `src/version.py`, par `packaging/build-installer.ps1` 
 
 ## [Non publié]
 
+## [0.8.4] - 2026-10-25
+
+### Corrigé
+
+- Chat : « Que dit Uchida 2015 sur… » n'était pas reconnu comme une question sur un
+  document de la bibliothèque (seule la forme « Uchida (2015) » l'était). Le nom et
+  l'année sont maintenant cherchés dans la bibliothèque et la recherche se limite à ce
+  document. Une question large sur un document (« que dit », « résume »…) reçoit son
+  introduction, les débuts de chapitres et sa conclusion, au lieu de passages voisins.
+- Chat : les noms d'éléments chimiques, les formules et les sigles de la réponse sont
+  vérifiés dans les passages, comme les chiffres. Un élément absent des sources (« iode »
+  pour des supraconducteurs à base de fer) est corrigé par une relecture du modèle, sinon
+  signalé sous la réponse (« Termes à vérifier »). La consigne demande aussi de garder les
+  noms techniques tels que les sources les écrivent.
+- Chat : tous les passages envoyés au modèle sont enregistrés avec la réponse, et plus
+  seulement ceux qu'elle cite, pour pouvoir retrouver d'où vient une erreur.
+- Découverte : « Ajouter à un carnet » ne permettait pas de créer un carnet. La fenêtre
+  propose maintenant « + Nouveau carnet », nommé d'après la recherche, qui reçoit
+  directement les articles choisis (aussi depuis la cartographie). Seuls les articles de
+  la bibliothèque entrent dans un carnet, avec leur PDF, reconnus par DOI puis par titre ;
+  les autres sont listés avec un lien vers l'éditeur, pour récupérer leur PDF d'abord.
+- Carnets : chaque source indique ce que le chat lit (PDF de la bibliothèque en entier, ou
+  texte ajouté à la main), avec « Lire ici » et « Bibliothèque » pour les PDF.
+- Chat d'un carnet : les suggestions de questions ne réagissaient pas au clic.
+- Barre latérale : une lecture des scans (OCR) interrompue cachait une mise à jour de la
+  bibliothèque en cours, réduite à « +1 ». La tâche en cours garde maintenant la pastille ;
+  l'OCR reste dans « +N » et dans la fiche Activité, avec son bouton Reprendre, et reprend
+  la pastille quand plus rien ne tourne.
+- Bibliothèque : un PDF dont pypdf refusait une page (grande figure vectorielle) n'était
+  pas indexé du tout et revenait comme « nouveau » à chaque actualisation. Il est lu page
+  par page : seule la page refusée manque.
+- Bibliothèque : un fichier devenu illisible perdait ses passages déjà indexés et
+  disparaissait des réponses. Ils sont gardés, le fichier est réessayé quand il change ou
+  après une mise à jour de Bibliobrain, et la fiche de la bibliothèque liste les fichiers
+  illisibles avec la raison.
+- Zotero : les PDF sans notice (pièces jointes seules) n'étaient pas indexés, sauf ceux
+  déposés par Bibliobrain. Ils le sont maintenant, titrés d'après le nom du fichier ; une
+  option des Paramètres permet de les ignorer (« Indexer les PDF sans notice Zotero »).
+- Zotero : pendant que Zotero écrivait dans sa base (synchronisation, import), la
+  bibliothèque pouvait revenir vide ou en erreur. La lecture est refaite depuis une copie ;
+  si elle échoue encore, un message indique que Zotero est occupé.
+- Démarrage : Bibliobrain refusait de démarrer quand le port 7860 était déjà pris (par
+  exemple par Stable Diffusion WebUI). Il prend maintenant un port libre entre 7861 et 7870
+  et s'en souvient.
+- Démarrage : un chemin relatif dans la configuration (comme `./chroma_db_zotero`) était lu
+  depuis le dossier de lancement ; lancé depuis un raccourci, Bibliobrain créait alors un
+  index vide. Ces chemins sont lus depuis le dossier de l'application.
+- Fiabilité : les invites personnalisées, les caches et la liste des PDF déposés sont
+  écrits sans risque de fichier tronqué, même quand un antivirus bloque le fichier. Une
+  mise à jour vérifie l'espace disque avant de se télécharger et ne laisse plus de paquet
+  partiel. Une revue de littérature arrêtée garde ce qu'elle avait déjà écrit.
+
 ## [0.8.3] - 2026-10-24
 
 ### Corrigé
@@ -408,7 +460,8 @@ Première version publique.
   bande horizontale de 100 px : c'est de nouveau une liste verticale. Historique replié vers
   1100 px : ses deux boutons ne débordent plus de la barre.
 
-[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.3...HEAD
+[Non publié]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.0...v0.8.1

@@ -23,6 +23,9 @@ _DEFAULT_RESEARCH_SCOPE_ENABLED = True
 _DEFAULT_AUTO_ENRICH_PDF_METADATA = False
 _DEFAULT_DISCOVERY_QUERY_PLANNER = False
 _DEFAULT_DISCOVERY_DENSE_ENABLED = True
+# Zotero keeps a PDF it found no record for as a standalone attachment; it is
+# often a paper all the same, so it is indexed unless the user opts out.
+_DEFAULT_INDEX_STANDALONE_PDFS = True
 _DEFAULT_DISCOVERY_CANDIDATE_MULTIPLIER = 4
 _DEFAULT_DISCOVERY_LLM_VALIDATION_MULTIPLIER = 3
 _DEFAULT_DEBUG_METRICS = False
@@ -257,6 +260,10 @@ def get_app_settings() -> dict[str, Any]:
             payload.get("discovery_dense_enabled"),
             _DEFAULT_DISCOVERY_DENSE_ENABLED,
         ),
+        "index_standalone_pdfs": _normalize_bool(
+            payload.get("index_standalone_pdfs"),
+            _DEFAULT_INDEX_STANDALONE_PDFS,
+        ),
         "discovery_candidate_multiplier": _normalize_discovery_multiplier(
             payload.get("discovery_candidate_multiplier"),
             _DEFAULT_DISCOVERY_CANDIDATE_MULTIPLIER,
@@ -341,6 +348,7 @@ def set_app_settings(
     research_scope_enabled: Any | None = None,
     discovery_query_planner: Any | None = None,
     discovery_dense_enabled: Any | None = None,
+    index_standalone_pdfs: Any | None = None,
     discovery_candidate_multiplier: Any | None = None,
     discovery_llm_validation_multiplier: Any | None = None,
     unpaywall_email: Any | None = None,
@@ -425,6 +433,11 @@ def set_app_settings(
         payload["discovery_dense_enabled"] = _normalize_bool(
             discovery_dense_enabled,
             _DEFAULT_DISCOVERY_DENSE_ENABLED,
+        )
+    if index_standalone_pdfs is not None:
+        payload["index_standalone_pdfs"] = _normalize_bool(
+            index_standalone_pdfs,
+            _DEFAULT_INDEX_STANDALONE_PDFS,
         )
     if discovery_candidate_multiplier is not None:
         payload["discovery_candidate_multiplier"] = _normalize_discovery_multiplier(
@@ -513,3 +526,11 @@ def set_app_settings(
         set_ollama_context_length(ollama_context_length)
     _save_app_settings_payload(payload)
     return get_app_settings()
+
+
+def index_standalone_pdfs_enabled() -> bool:
+    """Whether Zotero PDFs without a parent record are indexed too."""
+    try:
+        return bool(get_app_settings().get("index_standalone_pdfs", _DEFAULT_INDEX_STANDALONE_PDFS))
+    except (OSError, TypeError, ValueError):
+        return _DEFAULT_INDEX_STANDALONE_PDFS

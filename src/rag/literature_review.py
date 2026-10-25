@@ -580,7 +580,7 @@ def _resolve_review_context(model_name: str, required_tokens: int) -> int:
             return _REMOTE_CONTEXT_TOKENS
         resolved = resolve_ollama_context_length(model_name, required_tokens=required_tokens)
     except Exception:
-        _logger.debug("Recovered from an error in _resolve_review_context.", exc_info=True)
+        _logger.warning("Recovered from an error in _resolve_review_context.", exc_info=True)
         return _FALLBACK_CONTEXT_TOKENS
     return resolved or _FALLBACK_CONTEXT_TOKENS
 

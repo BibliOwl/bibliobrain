@@ -4,15 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>BIBLIOBRAIN</title>
-<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png?v=20261020-icon">
-<link rel="icon" type="image/x-icon" sizes="any" href="/static/logo_bibliobrain.ico?v=20261020-icon">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png?v=auto">
+<link rel="icon" type="image/x-icon" sizes="any" href="/static/logo_bibliobrain.ico?v=auto">
 <meta name="theme-color" content="#090916">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Bibliobrain">
-<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v=20261020-icon">
-<link rel="manifest" href="/static/manifest.webmanifest?v=20261015-logo">
-<script src="/static/js/boot.js?v=20260728-security-1"></script>
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v=auto">
+<link rel="manifest" href="/static/manifest.webmanifest?v=auto">
+<script src="/static/js/boot.js?v=auto"></script>
 <style id="startup-boot-critical">
   #startup-boot-splash {
     position: fixed;
@@ -88,11 +88,11 @@
   }
 </style>
 <link rel="preload" href="/static/fonts/inter-variable.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/static/css/app.css?v=20261023-ui-fixes-1">
-<link rel="stylesheet" href="/static/css/workspaces.css?v=20261023-ui-fixes-1">
-<link rel="stylesheet" href="/static/css/settings.css?v=20261023-ui-fixes-1">
-<link rel="stylesheet" href="/static/css/knowledge-graph.css?v=20261004-buttons-1">
-<link rel="stylesheet" href="/static/css/shell.css?v=20261023-ui-fixes-4">
+<link rel="stylesheet" href="/static/css/app.css?v=auto">
+<link rel="stylesheet" href="/static/css/workspaces.css?v=auto">
+<link rel="stylesheet" href="/static/css/settings.css?v=auto">
+<link rel="stylesheet" href="/static/css/knowledge-graph.css?v=auto">
+<link rel="stylesheet" href="/static/css/shell.css?v=auto">
 
 </head>
 <body>
@@ -110,7 +110,7 @@
   <span></span>
 </button>
 <div id="mobile-page-brand" aria-hidden="true">
-  <img src="/static/logo_bibliobrain_head.svg?v=20261015-logo" alt="">
+  <img src="/static/logo_bibliobrain_head.svg?v=auto" alt="">
   <span>BIBLIOBR<span class="brand-ai">AI</span>N</span>
 </div>
 <button id="mobile-nav-backdrop" type="button" data-bb-static-onclick="close-mobile-nav" aria-label="Fermer la navigation"></button>
@@ -121,7 +121,7 @@
 
     <!-- Top: logo + title -->
     <div id="sidebar-top">
-      <img src="/static/logo_bibliobrain_head.svg?v=20261015-logo" alt="logo" id="sidebar-logo">
+      <img src="/static/logo_bibliobrain_head.svg?v=auto" alt="logo" id="sidebar-logo">
       <span id="sidebar-title">BIBLIOBR<span class="brand-ai">AI</span>N</span>
         <span class="tab-beta" title="En développement actif">alpha</span>
       <button id="sidebar-toggle" data-bb-static-onclick="toggle-sidebar" title="Réduire la sidebar">
@@ -1849,6 +1849,18 @@
         </details>
       </div>
 
+      <div class="settings-section settings-card">
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <label class="settings-row-title" for="index-standalone-pdfs" data-i18n="settings.indexStandalonePdfs">Indexer les PDF sans notice Zotero</label>
+            <span class="settings-row-desc" data-i18n="settings.indexStandalonePdfsDesc">Zotero garde un PDF dont il n’a pas trouvé la référence comme pièce jointe seule. Ces PDF sont indexés avec leur nom de fichier comme titre. Décochez pour les ignorer, puis actualisez le RAG.</span>
+          </div>
+          <div class="settings-control settings-control-inline">
+            <span class="settings-switch"><input type="checkbox" id="index-standalone-pdfs" role="switch"></span>
+          </div>
+        </div>
+      </div>
+
       <div class="settings-section settings-card settings-ocr-card" id="settings-scans" data-ocr-view="check" hidden>
         <div class="settings-row" data-ocr-panel="check">
           <div class="settings-row-info">
@@ -3248,7 +3260,7 @@ ollama serve</pre>
   </div>
 </div>
 
-<script src="/static/js/startup-preopen.js?v=20260728-security-1"></script>
+<script src="/static/js/startup-preopen.js?v=auto"></script>
 
 <div id="nb-citation-graph-overlay" data-bb-static-onclick="close-nb-citation-graph" aria-hidden="true"></div>
 <div id="nb-citation-graph-modal" role="dialog" aria-modal="true" aria-labelledby="nb-cg-title" hidden>
@@ -3450,31 +3462,31 @@ ollama serve</pre>
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-<script src="/static/js/event-bindings.js?v=20260912-cartography-legend-1"></script>
-<script src="/static/js/i18n.js?v=20261023-ui-fixes-1"></script>
-<script src="/static/js/app.js?v=20261004-status-pill-1"></script>
-<script src="/static/js/app/rag.js?v=20261019-no-chat-model-1"></script>
-<script src="/static/js/app/ocr.js?v=20261004-status-pill-1"></script>
-<script src="/static/js/app/chat.js?v=20261023-ui-fixes-2"></script>
-<script src="/static/js/app/bug-reports.js?v=20260905-feature-modules-1"></script>
-<script src="/static/js/app/updates.js?v=20261008-updates-1"></script>
-<script src="/static/js/app/settings-panel.js?v=20261023-ui-fixes-1"></script>
-<script src="/static/js/app/library.js?v=20261016-cg-card-1"></script>
-<script src="/static/js/app/library-drop.js?v=20261010-library-drop-1"></script>
-<script src="/static/js/app/drafting.js?v=20260926-assistant-panel-2"></script>
-<script src="/static/js/app/drafting-interop.js?v=20260928-word-zotero-1"></script>
-<script src="/static/js/app/discovery.js?v=20260923-auto-index-1"></script>
-<script src="/static/js/app/workspaces.js?v=20261023-ui-fixes-1"></script>
-<script src="/static/js/app/startup.js?v=20261023-ui-fixes-1"></script>
-<script src="/static/js/app/feature-tour.js?v=20260926-assistant-panel-2"></script>
-<script src="/static/js/app/transport.js?v=20260913-document-rag-1"></script>
-<script src="/static/js/app/assistant-rendering.js?v=20261005-sources-panel-1"></script>
-<script src="/static/js/app/notebooks.js?v=20261023-ui-fixes-5"></script>
-<script src="/static/js/app/notifications.js?v=20260912-external-api-settings-link-1"></script>
-<script src="/static/js/app/citation-graph.js?v=20260912-cartography-legend-1"></script>
-<script src="/static/js/settings.js?v=20261019-no-chat-model-1"></script>
-<script src="/static/js/knowledge-graph.js?v=20260906-library-source-actions-1"></script>
-<script src="/static/js/static-event-bindings.js?v=20261019-no-chat-model-1"></script>
+<script src="/static/js/event-bindings.js?v=auto"></script>
+<script src="/static/js/i18n.js?v=auto"></script>
+<script src="/static/js/app.js?v=auto"></script>
+<script src="/static/js/app/rag.js?v=auto"></script>
+<script src="/static/js/app/ocr.js?v=auto"></script>
+<script src="/static/js/app/chat.js?v=auto"></script>
+<script src="/static/js/app/bug-reports.js?v=auto"></script>
+<script src="/static/js/app/updates.js?v=auto"></script>
+<script src="/static/js/app/settings-panel.js?v=auto"></script>
+<script src="/static/js/app/library.js?v=auto"></script>
+<script src="/static/js/app/library-drop.js?v=auto"></script>
+<script src="/static/js/app/drafting.js?v=auto"></script>
+<script src="/static/js/app/drafting-interop.js?v=auto"></script>
+<script src="/static/js/app/discovery.js?v=auto"></script>
+<script src="/static/js/app/workspaces.js?v=auto"></script>
+<script src="/static/js/app/startup.js?v=auto"></script>
+<script src="/static/js/app/feature-tour.js?v=auto"></script>
+<script src="/static/js/app/transport.js?v=auto"></script>
+<script src="/static/js/app/assistant-rendering.js?v=auto"></script>
+<script src="/static/js/app/notebooks.js?v=auto"></script>
+<script src="/static/js/app/notifications.js?v=auto"></script>
+<script src="/static/js/app/citation-graph.js?v=auto"></script>
+<script src="/static/js/settings.js?v=auto"></script>
+<script src="/static/js/knowledge-graph.js?v=auto"></script>
+<script src="/static/js/static-event-bindings.js?v=auto"></script>
 
 </body>
 </html>
