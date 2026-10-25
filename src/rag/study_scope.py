@@ -239,7 +239,7 @@ def _structure_label(text: str) -> str:
 
 def _is_ending(text: str) -> bool:
     match = _HEADING_RE.search(text[:600])
-    return bool(match) and _plain(match.group(1)).startswith(_ENDINGS)
+    return match is not None and _plain(match.group(1)).startswith(_ENDINGS)
 
 
 def _spread(items: list[Any], count: int) -> list[Any]:

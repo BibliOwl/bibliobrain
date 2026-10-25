@@ -21,7 +21,7 @@ def _skip_other_histories(monkeypatch) -> None:
     the drafting history.
     """
     endpoint = next(
-        route.endpoint
+        getattr(route, "endpoint")
         for route in app_api.app.routes
         if getattr(route, "path", "") == "/api/reset-history"
     )

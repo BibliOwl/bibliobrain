@@ -166,13 +166,13 @@ def test_default_manifest_is_a_static_github_release_asset() -> None:
 
 def test_changelog_section_stops_at_the_next_version_or_links() -> None:
     changelog = (
-        "# Changelog\n\n## [Non publié]\n\n- WIP\n\n## [0.8.0] - 2026-10-20\n\n"
-        "### Ajouté\n\n- Mises à jour.\n\n## [0.7.3] - 2026-08-23\n\n- Ancien.\n\n"
-        "[Non publié]: https://example.org/compare/v0.8.0...HEAD\n"
+        "# Changelog\n\n## [Unreleased]\n\n- WIP\n\n## [0.8.0] - 2026-10-20\n\n"
+        "### Added\n\n- Updates.\n\n## [0.7.3] - 2026-08-23\n\n- Older.\n\n"
+        "[Unreleased]: https://example.org/compare/v0.8.0...HEAD\n"
     )
 
-    assert changelog_section(changelog, "0.8.0") == "### Ajouté\n\n- Mises à jour."
-    assert changelog_section(changelog, "0.7.3") == "- Ancien."
+    assert changelog_section(changelog, "0.8.0") == "### Added\n\n- Updates."
+    assert changelog_section(changelog, "0.7.3") == "- Older."
     assert changelog_section(changelog, "9.9.9") == ""
 
 
@@ -224,15 +224,15 @@ def _load_release_tools():
 def test_prepare_release_dates_the_unreleased_section_and_links() -> None:
     release_tools = _load_release_tools()
     changelog = (
-        "## [Non publié]\n\n### Ajouté\n\n- Mises à jour.\n\n## [0.7.3] - 2026-08-23\n\n"
-        "[Non publié]: https://example.org/repo/compare/v0.7.3...HEAD\n"
+        "## [Unreleased]\n\n### Added\n\n- Updates.\n\n## [0.7.3] - 2026-08-23\n\n"
+        "[Unreleased]: https://example.org/repo/compare/v0.7.3...HEAD\n"
         "[0.7.3]: https://example.org/repo/compare/v0.7.2...v0.7.3\n"
     )
 
     prepared = release_tools.prepare_changelog(changelog, "0.8.0", "2026-10-20")
 
-    assert prepared.startswith("## [Non publié]\n\n## [0.8.0] - 2026-10-20\n\n### Ajouté")
-    assert "[Non publié]: https://example.org/repo/compare/v0.8.0...HEAD" in prepared
+    assert prepared.startswith("## [Unreleased]\n\n## [0.8.0] - 2026-10-20\n\n### Added")
+    assert "[Unreleased]: https://example.org/repo/compare/v0.8.0...HEAD" in prepared
     assert "[0.8.0]: https://example.org/repo/compare/v0.7.3...v0.8.0" in prepared
     with pytest.raises(SystemExit):
         release_tools.prepare_changelog(prepared, "0.8.0", "2026-10-21")
@@ -504,9 +504,12 @@ def test_the_update_is_refused_up_front_on_a_full_disk(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     requested: list[str] = []
-    _client_with_transport(
-        monkeypatch, lambda request: requested.append(str(request.url)) or httpx.Response(200)
-    )
+
+    def record(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200)
+
+    _client_with_transport(monkeypatch, record)
     monkeypatch.setattr(
         update_check.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000)
     )

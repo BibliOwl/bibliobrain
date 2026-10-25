@@ -1,7 +1,7 @@
 """Release helpers: prepare a version, package it, then describe the release.
 
     python scripts/release_tools.py prepare 0.8.0
-        Writes VERSION and turns the CHANGELOG "Non publié" section into a dated
+        Writes VERSION and turns the CHANGELOG "Unreleased" section into a dated
         "0.8.0" section. Commit, tag ``v0.8.0`` and push the tag yourself.
 
     python scripts/release_tools.py package --source <clean export> --output dist/Bibliobrain-Windows.zip
@@ -39,7 +39,7 @@ from src.update_manifest import (  # noqa: E402
     is_valid_version,
 )
 
-UNRELEASED_HEADING = "## [Non publié]"
+UNRELEASED_HEADING = "## [Unreleased]"
 UNRELEASED_TEMPLATE = f"{UNRELEASED_HEADING}\n\n"
 
 # Folder the user gets when extracting the ZIP package.
@@ -78,7 +78,7 @@ def _write(path: Path, text: str) -> None:
 
 
 def prepare_changelog(changelog: str, version: str, today: str) -> str:
-    """Move "Non publié" under a dated version heading and refresh the compare links."""
+    """Move "Unreleased" under a dated version heading and refresh the compare links."""
     if UNRELEASED_HEADING not in changelog:
         raise SystemExit(f"CHANGELOG.md has no '{UNRELEASED_HEADING}' section.")
     if re.search(rf"^## \[{re.escape(version)}\]", changelog, re.MULTILINE):
@@ -89,7 +89,7 @@ def prepare_changelog(changelog: str, version: str, today: str) -> str:
         1,
     )
     link = re.search(
-        r"^\[Non publié\]: (?P<base>\S+)/compare/(?P<previous>v[^.\s]\S*?)\.\.\.HEAD$",
+        r"^\[Unreleased\]: (?P<base>\S+)/compare/(?P<previous>v[^.\s]\S*?)\.\.\.HEAD$",
         changelog,
         re.MULTILINE,
     )
@@ -97,7 +97,7 @@ def prepare_changelog(changelog: str, version: str, today: str) -> str:
         base, previous = link.group("base"), link.group("previous")
         changelog = changelog.replace(
             link.group(0),
-            f"[Non publié]: {base}/compare/v{version}...HEAD\n"
+            f"[Unreleased]: {base}/compare/v{version}...HEAD\n"
             f"[{version}]: {base}/compare/{previous}...v{version}",
             1,
         )
