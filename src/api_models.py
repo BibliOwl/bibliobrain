@@ -446,6 +446,18 @@ class CitationScopeGraphRequest(BaseModel):
     strategy: Literal["balanced", "most_cited", "recent"] = "balanced"
 
 
+class PapersCitationGraphRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=60)
+
+    @field_validator("paths")
+    @classmethod
+    def _check_paths(cls, value: list[str]) -> list[str]:
+        cleaned = [str(path or "").strip() for path in value]
+        if any(not path or len(path) > _PATH_MAX_LEN for path in cleaned):
+            raise ValueError("Chemin d'article invalide.")
+        return cleaned
+
+
 class BibliographicSearchGraphRequest(BaseModel):
     query: str = Field(min_length=2, max_length=300)
     from_year: int | None = Field(default=None, ge=1800, le=2200)

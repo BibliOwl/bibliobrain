@@ -1172,7 +1172,7 @@ function switchTab(name, btn) {
   }
   if (name === 'connections') {
     if (typeof setCartographyView === 'function') {
-      setCartographyView(document.getElementById('kg-view-mode')?.value || 'citations', { load: false });
+      setCartographyView(document.getElementById('kg-view-mode')?.value || 'articles', { load: false });
     }
     refreshKgNotebookTargets().then(_updateKnowledgeFocusActions);
   }
@@ -3391,7 +3391,7 @@ function _openRerankerSettings() {
   if (!document.getElementById('settings-panel')?.classList.contains('open')) toggleSettings();
   switchSettingsTab('expert-search');
   window.setTimeout(() => {
-    document.getElementById('reranker-warmup-btn')?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    document.getElementById('reranker-warmup-btn')?.scrollIntoView?.({ block: 'center', behavior: preferredScrollBehavior() });
   }, 80);
 }
 

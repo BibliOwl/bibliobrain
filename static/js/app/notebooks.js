@@ -595,7 +595,7 @@ function showNbSourceForm() {
   if (!form || !body) return;
   form.style.display = 'flex';
   window.requestAnimationFrame(() => {
-    body.scrollTo({top: body.scrollHeight, behavior: 'smooth'});
+    body.scrollTo({top: body.scrollHeight, behavior: preferredScrollBehavior()});
     window.setTimeout(() => {
       if (form.style.display !== 'none') form.querySelector('#nb-source-type')?.focus();
     }, 180);
@@ -986,11 +986,11 @@ async function sendNbMessage() {
   const shouldRefreshNotesAfterStream = _nbMessageRequestsNotesUpdate(msg);
   const debugTracker = isDebugMetricsEnabled() ? createDebugMetricsTracker({ model }) : null;
   const scheduleScroll = () => {
-    if (scrollQueued) return;
+    if (scrollQueued || !isVisualUpdateVisible(msgs)) return;
     scrollQueued = true;
     window.requestAnimationFrame(() => {
       scrollQueued = false;
-      msgs.scrollTop = msgs.scrollHeight;
+      if (isVisualUpdateVisible(msgs)) msgs.scrollTop = msgs.scrollHeight;
     });
   };
 

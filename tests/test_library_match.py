@@ -20,7 +20,7 @@ def test_library_match_uses_doi_then_title(monkeypatch: Any) -> None:
     _library(
         monkeypatch,
         {
-            "zotero/uchida.pdf": SimpleNamespace(
+            "zotero/durand.pdf": SimpleNamespace(
                 title="High temperature superconductivity", doi="10.7566/JPSJ.84.114701"
             ),
             # Outside Zotero: title read from the PDF, no DOI.
@@ -43,7 +43,7 @@ def test_library_match_uses_doi_then_title(monkeypatch: Any) -> None:
         ]
     )
 
-    assert matches[0] == {"rel_path": "zotero/uchida.pdf", "matched_by": "doi"}
+    assert matches[0] == {"rel_path": "zotero/durand.pdf", "matched_by": "doi"}
     assert matches[1] == {"rel_path": "inbox/Homogeneous_TA.pdf", "matched_by": "title"}
     assert matches[2] == {"rel_path": "inbox/Homogeneous_TA.pdf", "matched_by": "similar_title"}
     assert matches[3] == {"rel_path": "", "matched_by": ""}

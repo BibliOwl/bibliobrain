@@ -17,6 +17,7 @@ from src.api_models import (
     BibliographicSearchGraphRequest,
     CitationEntitySearchRequest,
     CitationScopeGraphRequest,
+    PapersCitationGraphRequest,
 )
 from src.library_taxonomy import build_article_taxonomy_payload, clear_article_taxonomy_cache
 
@@ -120,9 +121,9 @@ async def api_library_citation_graph(path: str, *, external_api_allowed: Externa
         )
 
 
-@router.get("/api/library/internal-citation-graph")
-async def api_library_internal_citation_graph(
-    refresh: bool = False,
+@router.post("/api/library/citation-graph")
+async def api_library_papers_citation_graph(
+    req: PapersCitationGraphRequest,
     *,
     external_api_allowed: ExternalApiAllowed,
 ):
@@ -131,27 +132,17 @@ async def api_library_internal_citation_graph(
             "external_api_permission_required",
             "Autorisation des requêtes API externes requise.",
             status_code=403,
-            extra={
-                "engine": "openalex_internal",
-                "graph_type": "library_citations",
-                "warning": "Autorisation des requêtes API externes requise.",
-            },
         )
-    from src.citation_graph import build_library_internal_citation_graph
+    from src.citation_graph import build_papers_citation_graph
 
     try:
-        return await build_library_internal_citation_graph(force_refresh=refresh)
+        return await build_papers_citation_graph(req.paths)
     except Exception:
-        _logger.exception("Internal citation graph construction failed")
+        _logger.exception("Papers citation graph construction failed")
         return _citation_graph_error(
-            "internal_citation_graph_unavailable",
-            "Construction du graphe de citations internes indisponible.",
+            "citation_graph_unavailable",
+            "Construction du graphe de citations indisponible.",
             status_code=502,
-            extra={
-                "engine": "openalex_internal",
-                "graph_type": "library_citations",
-                "warning": "Construction du graphe de citations internes indisponible.",
-            },
         )
 
 

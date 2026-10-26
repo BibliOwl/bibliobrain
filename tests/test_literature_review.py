@@ -711,3 +711,37 @@ def test_review_prompt_carries_no_english_model_profile_note(
     note = get_chat_response_note("ornith-1.5:9b")
     assert note.strip(), "the generic profile note should exist"
     assert note not in captures[0]["prompt"]
+
+
+def test_stop_during_the_synthesis_reaches_the_llm_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop while the structured call runs: the call gets the signal and the
+    stream ends without an error event (the endpoint saves the interruption)."""
+    from src.llm_provider import StreamAbortSignal
+    from src.rag import literature_review as lr
+    from src.rag import query_engine as qe
+    from src.rag import state
+
+    with state._state_lock:
+        state.document_chain = object()
+        state.vectorstore = object()
+    fake_docs = [_doc("Paper one content", article_id="p1", zotero_title="Paper One",
+                      zotero_year="2020", source="p1.pdf", page="1")]
+    monkeypatch.setattr(qe, "_retrieve_documents", lambda *a, **kw: fake_docs)
+    signal = StreamAbortSignal()
+    seen: dict[str, Any] = {}
+
+    def _stopped_call(*args: Any, abort_signal: Any = None, **kwargs: Any):
+        seen["abort_signal"] = abort_signal
+        signal.abort("user_stop")
+        abort_signal.throw_if_aborted()
+
+    monkeypatch.setattr("src.llm_provider.invoke_structured_chat", _stopped_call)
+
+    events = list(
+        lr.stream_literature_review(
+            "revue sur les pertes AC", model_name="dummy", threshold=0.0, abort_signal=signal
+        )
+    )
+
+    assert seen["abort_signal"] is signal
+    assert [e["type"] for e in events if e["type"] in {"token", "error", "sources"}] == []

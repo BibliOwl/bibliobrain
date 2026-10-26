@@ -2039,10 +2039,10 @@ async function selectRow(i, options = {}) {
   if (!skipScroll) {
     if (isMobileNavViewport()) {
       window.requestAnimationFrame(() => {
-        document.getElementById('library-detail')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        document.getElementById('library-detail')?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() });
       });
     } else if (row) {
-      row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      row.scrollIntoView({ block: 'nearest', behavior: preferredScrollBehavior() });
     }
   }
   refreshAnalysisForSelection();
@@ -2066,7 +2066,7 @@ async function selectRow(i, options = {}) {
 }
 
 function scrollLibraryListIntoView() {
-  document.getElementById('library-main')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  document.getElementById('library-main')?.scrollIntoView({ block: 'start', behavior: preferredScrollBehavior() });
 }
 
 async function loadAnalysisTypes() {

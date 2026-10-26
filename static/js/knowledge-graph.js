@@ -300,7 +300,7 @@ async function selectRowByPath(relPath) {
     await selectRow(idx);
     const row = document.querySelector(`#lib-tbody tr[data-i="${idx}"]`);
     if (row) {
-      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.scrollIntoView({ block: 'center', behavior: preferredScrollBehavior() });
       row.classList.add('highlight-flash');
       setTimeout(() => row.classList.remove('highlight-flash'), 1200);
     }
@@ -1727,7 +1727,8 @@ function _renderKnowledgeGraphLinks() {
       const end = projectPoint(target, 'left');
       const dx = Math.max(34, (end.x - start.x) * 0.45);
       const delay = (depth * 85) + (targetIndex * 38);
-      const shouldAnimate = animateFromDepth !== null && depth >= animateFromDepth;
+      const shouldAnimate = preferredScrollBehavior() === 'smooth'
+        && animateFromDepth !== null && depth >= animateFromDepth;
       const path = [
         `M ${start.x.toFixed(1)} ${start.y.toFixed(1)}`,
         `C ${(start.x + dx).toFixed(1)} ${start.y.toFixed(1)},`,
@@ -1783,7 +1784,7 @@ function _scrollKnowledgeGraphToFocusColumn() {
   const targetColumn = columns[columns.length - 1];
   if (!targetColumn) return;
   const targetLeft = Math.max(0, targetColumn.offsetLeft - 22);
-  stage.scrollTo({ left: targetLeft, behavior: 'smooth' });
+  stage.scrollTo({ left: targetLeft, behavior: preferredScrollBehavior() });
 }
 
 function _initKnowledgeGraphColumnLinks() {
@@ -2483,7 +2484,7 @@ function setResearchScopeFeatureEnabled(enabled) {
     if ('disabled' in element) element.disabled = !_researchScopeFeatureEnabled;
   });
   if (!_researchScopeFeatureEnabled && document.getElementById('kg-view-mode')?.value === 'research') {
-    setCartographyView('citations');
+    setCartographyView('articles');
   }
 }
 
@@ -2494,10 +2495,10 @@ function _kgSetThematicTools(visible) {
 }
 
 function setCartographyView(view, { load = true } = {}) {
-  const allowedViews = new Set(['citations', 'research', 'retrieval', 'library']);
-  const requestedView = allowedViews.has(String(view || '')) ? String(view) : 'citations';
+  const allowedViews = new Set(['articles', 'research', 'retrieval', 'library']);
+  const requestedView = allowedViews.has(String(view || '')) ? String(view) : 'articles';
   const nextView = requestedView === 'research' && !_researchScopeFeatureEnabled
-    ? 'citations'
+    ? 'articles'
     : requestedView;
   const viewSelect = document.getElementById('kg-view-mode');
   if (viewSelect) viewSelect.value = nextView;
@@ -2509,7 +2510,7 @@ function setCartographyView(view, { load = true } = {}) {
   });
 
   const copyByView = {
-    citations: ['connections.citationsTitle', 'connections.citationsDescription'],
+    articles: ['connections.articlesTitle', 'connections.articlesDescription'],
     research: ['connections.researchTitle', 'connections.researchDescription'],
     retrieval: ['connections.retrievalTitle', 'connections.retrievalDescription'],
     library: ['connections.libraryTitle', 'connections.libraryDescription'],
@@ -2520,12 +2521,24 @@ function setCartographyView(view, { load = true } = {}) {
 
   const graphSection = document.getElementById('knowledge-graph-section');
   const researchWorkspace = document.getElementById('research-scope-workspace');
+  const articleWorkspace = document.getElementById('article-graph-workspace');
   const isResearch = nextView === 'research';
-  if (!isResearch && typeof _nbCg !== 'undefined' && _nbCg.embedded) closeNbCitationGraph();
-  if (graphSection) graphSection.hidden = isResearch;
+  const isArticles = nextView === 'articles';
+  // The author/lab graph is rebuilt on demand; a graph built from articles
+  // stays in its screen so switching to the overview and back keeps it.
+  if (!isResearch && typeof _nbCg !== 'undefined' && _nbCg.embedded === 'research') closeNbCitationGraph();
+  if (graphSection) graphSection.hidden = isResearch || isArticles;
   if (researchWorkspace) researchWorkspace.hidden = !isResearch;
+  if (articleWorkspace) articleWorkspace.hidden = !isArticles;
   const headerTools = document.getElementById('cartography-header-tools');
-  if (headerTools) headerTools.hidden = isResearch;
+  if (headerTools) headerTools.hidden = isResearch || isArticles;
+  if (isArticles) {
+    if (typeof showArticleGraphView === 'function') showArticleGraphView();
+    window.requestAnimationFrame(() => {
+      if (typeof refreshLayoutResizers === 'function') refreshLayoutResizers();
+    });
+    return;
+  }
   if (isResearch) {
     if (typeof _researchScopeBindUiOnce === 'function') _researchScopeBindUiOnce();
     const results = document.getElementById('research-scope-results');
@@ -2566,26 +2579,14 @@ function openRagRetrievalGraph(query, sources, answerOrigin = 'rag') {
 }
 
 async function loadKnowledgeGraph(options = {}) {
-  if (!options.silent) {
-    const selectedView = String(document.getElementById('kg-view-mode')?.value || 'citations');
-    if (selectedView === 'research') return null;
-    _setKnowledgeGraphStatus(selectedView === 'citations'
-      ? 'Chargement des citations internes…'
-      : 'Chargement du graphe conceptuel…');
-  }
+  const selectedView = String(document.getElementById('kg-view-mode')?.value || 'articles');
+  // These two views draw their own graph (citation-graph.js).
+  if (selectedView === 'research' || selectedView === 'articles') return null;
+  if (!options.silent) _setKnowledgeGraphStatus('Chargement du graphe conceptuel…');
   try {
-    const viewMode = String(document.getElementById('kg-view-mode')?.value || 'citations');
+    const viewMode = selectedView;
     if (viewMode === 'retrieval') {
       const payload = _buildRagRetrievalGraphPayload();
-      if (!options.silent) _setKnowledgeGraphStatus('');
-      _kgUpdateGraphKindPill(payload);
-      _renderKnowledgeGraph(payload);
-      return payload;
-    }
-    if (viewMode === 'citations') {
-      const refreshQuery = options.refresh ? '?refresh=true' : '';
-      const r = await fetch(`/api/library/internal-citation-graph${refreshQuery}`);
-      const payload = await r.json();
       if (!options.silent) _setKnowledgeGraphStatus('');
       _kgUpdateGraphKindPill(payload);
       _renderKnowledgeGraph(payload);

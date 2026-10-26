@@ -86,6 +86,11 @@
   @media (prefers-reduced-motion: reduce) {
     #startup-boot-progress span { animation: none; width: 100%; }
   }
+  html[data-performance-mode="light"] #startup-boot-progress span {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
 </style>
 <link rel="preload" href="/static/fonts/inter-variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/css/app.css?v=auto">
@@ -566,6 +571,7 @@
               <span class="lib-selection-sep" aria-hidden="true"></span>
               <button type="button" class="lib-selection-btn is-primary" data-bb-static-onclick="ask-chat-about-library-selection" data-lib-selection-action data-i18n="library.selectionAskChat">Questionner dans le chat</button>
               <button type="button" class="lib-selection-btn" data-bb-static-onclick="open-library-selection-notebook-modal" data-lib-selection-action data-i18n="library.addToNotebook">Ajouter au carnet</button>
+              <button type="button" class="lib-selection-btn" data-bb-static-onclick="open-article-graph-from-library-selection" data-lib-selection-action data-i18n="library.selectionCitationGraph">Graphe de citations</button>
               <details class="lib-selection-more" id="lib-selection-more" data-lib-selection-action>
                 <summary class="btn-icon-more" aria-label="Plus d’actions" title="Plus d’actions" data-i18n-aria-label="library.moreActions" data-i18n-title="library.moreActions"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></summary>
                 <div class="lib-selection-more-popover" role="menu">
@@ -1168,12 +1174,12 @@
         <header id="cartography-header">
           <h2 id="cartography-title" data-i18n="connections.pageTitle">Cartographies</h2>
           <div class="cartography-switch" role="tablist" aria-label="Type de cartographie" data-i18n-aria-label="connections.viewAria">
-            <button class="cartography-view-tab is-active" type="button" role="tab" aria-selected="true" tabindex="0" data-cartography-view="citations" data-bb-static-onclick="set-cartography-view" data-bb-static-onkeydown="handle-cartography-view-keydown"><span data-i18n="connections.viewCitations">Qui cite qui</span></button>
-            <button class="cartography-view-tab" type="button" role="tab" aria-selected="false" tabindex="-1" data-cartography-view="library" data-bb-static-onclick="set-cartography-view" data-bb-static-onkeydown="handle-cartography-view-keydown"><span data-i18n="connections.viewLibrary">Thèmes</span></button>
+            <button class="cartography-view-tab is-active" type="button" role="tab" aria-selected="true" tabindex="0" data-cartography-view="articles" data-bb-static-onclick="set-cartography-view" data-bb-static-onkeydown="handle-cartography-view-keydown"><span data-i18n="connections.viewArticles">Depuis des articles</span></button>
+            <button class="cartography-view-tab" type="button" role="tab" aria-selected="false" tabindex="-1" data-cartography-view="library" data-bb-static-onclick="set-cartography-view" data-bb-static-onkeydown="handle-cartography-view-keydown"><span data-i18n="connections.viewLibrary">Vue d’ensemble</span></button>
             <button class="cartography-view-tab" type="button" role="tab" aria-selected="false" tabindex="-1" data-cartography-view="retrieval" data-bb-static-onclick="set-cartography-view" data-bb-static-onkeydown="handle-cartography-view-keydown"><span data-i18n="connections.viewRetrieval">Dernière réponse</span></button>
             <button class="cartography-view-tab" type="button" role="tab" aria-selected="false" tabindex="-1" data-cartography-view="research" data-research-scope-feature data-bb-static-onclick="set-cartography-view" data-bb-static-onkeydown="handle-cartography-view-keydown"><span data-i18n="connections.viewResearch">Auteur ou labo</span><span class="tab-beta" data-i18n="connections.beta">bêta</span></button>
           </div>
-          <div id="cartography-header-tools">
+          <div id="cartography-header-tools" hidden>
             <div id="kg-search-wrap" class="search-field">
                 <svg class="search-field-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <input
@@ -1221,12 +1227,48 @@
           </div>
           <label class="visually-hidden" for="kg-view-mode" data-i18n="connections.view">Vue</label>
           <select id="kg-view-mode" class="visually-hidden" data-bb-static-onchange="load-knowledge-graph" aria-label="Type de cartographie" data-i18n-aria-label="connections.viewAria" tabindex="-1">
-            <option value="citations" selected data-i18n="connections.viewCitations">Citations bibliothèque</option>
-            <option value="research" data-research-scope-feature data-i18n="connections.viewResearch">Auteur / laboratoire</option>
+            <option value="articles" selected data-i18n="connections.viewArticles">Depuis des articles</option>
+            <option value="library" data-i18n="connections.viewLibrary">Vue d’ensemble</option>
             <option value="retrieval" data-i18n="connections.viewRetrieval">Recherche RAG</option>
-            <option value="library" data-i18n="connections.viewLibrary">Relations thématiques</option>
+            <option value="research" data-research-scope-feature data-i18n="connections.viewResearch">Auteur / laboratoire</option>
           </select>
         </header>
+
+        <section id="article-graph-workspace" aria-labelledby="article-graph-title">
+          <div id="article-graph-builder">
+            <div id="article-graph-panel">
+              <div class="article-graph-header">
+                <span class="research-scope-eyebrow" data-i18n="articleGraph.eyebrow">Graphe de citations · OpenAlex</span>
+                <h2 id="article-graph-title" data-i18n="articleGraph.title">Construire un graphe depuis des articles</h2>
+                <p data-i18n="articleGraph.subtitle">Choisissez un ou plusieurs articles de la bibliothèque. Le graphe montre ce qu’ils citent, qui les cite et les liens entre eux.</p>
+              </div>
+              <form id="article-graph-form">
+                <label class="article-graph-search-field">
+                  <span data-i18n="articleGraph.searchLabel">Ajouter un article</span>
+                  <input id="article-graph-search" type="search" autocomplete="off" spellcheck="false" placeholder="Titre, auteur ou année…" data-i18n-placeholder="articleGraph.searchPlaceholder" aria-controls="article-graph-results">
+                </label>
+                <div id="article-graph-results" class="article-graph-results" role="listbox" aria-label="Articles de la bibliothèque" data-i18n-aria-label="articleGraph.resultsAria" aria-multiselectable="true"></div>
+                <div class="article-graph-shortcuts" role="group" aria-label="Ajouter d’un coup" data-i18n-aria-label="articleGraph.shortcutsAria">
+                  <button type="button" class="article-graph-shortcut" id="article-graph-from-library" disabled><span data-i18n="articleGraph.fromLibrary">Sélection de la bibliothèque</span> <span class="article-graph-shortcut-count">0</span></button>
+                  <button type="button" class="article-graph-shortcut" id="article-graph-from-answer" disabled><span data-i18n="articleGraph.fromAnswer">Sources de la dernière réponse</span> <span class="article-graph-shortcut-count">0</span></button>
+                  <select id="article-graph-notebook" class="article-graph-shortcut" aria-label="Ajouter les articles d’un carnet" data-i18n-aria-label="articleGraph.fromNotebookAria" disabled>
+                    <option value="" data-i18n="articleGraph.fromNotebook">Articles d’un carnet…</option>
+                  </select>
+                </div>
+                <div class="article-graph-selection-head">
+                  <span id="article-graph-count" class="article-graph-count" aria-live="polite" data-i18n="articleGraph.countNone">Aucun article choisi</span>
+                  <button type="button" class="btn btn-ghost" id="article-graph-clear" hidden data-i18n="articleGraph.clear">Tout retirer</button>
+                </div>
+                <ul id="article-graph-selected" class="article-graph-selected"></ul>
+                <div id="article-graph-status" class="research-scope-status" role="status" aria-live="polite"></div>
+                <div class="research-scope-actions">
+                  <button class="btn btn-indigo" id="article-graph-build" type="submit" disabled data-i18n="articleGraph.build">Construire le graphe</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          <div id="article-graph-citation-workspace" hidden></div>
+        </section>
 
         <section id="research-scope-workspace" aria-labelledby="research-scope-title" hidden>
           <div id="research-scope-builder">
@@ -1284,7 +1326,7 @@
           <div id="cartography-citation-workspace" hidden></div>
         </section>
 
-        <div id="knowledge-graph-section">
+        <div id="knowledge-graph-section" hidden>
           <div id="knowledge-header">
             <div class="kg-header-main">
               <div class="kg-title-block">
@@ -2947,7 +2989,7 @@
         <div class="settings-row">
           <div class="settings-row-info">
             <label class="settings-row-title" for="update-check-enabled" data-i18n="update.settingsTitle">Vérifier les mises à jour chaque jour</label>
-            <span class="settings-row-desc" data-i18n="update.settingsDesc">Une seule requête par jour vers la page des versions publiées sur GitHub : Bibliobrain n’envoie aucun identifiant ni rien sur vos documents ; GitHub voit votre adresse IP. Rien n’est installé sans votre accord.</span>
+            <span class="settings-row-desc" data-i18n="update.settingsDesc">Une seule requête par jour vers la page des versions publiées sur GitHub : Bibliobrain n’envoie aucun identifiant ni rien sur vos documents ; GitHub voit votre adresse IP. Avec l’installateur ou le ZIP, la nouvelle version est téléchargée d’avance, mais rien n’est installé sans votre clic.</span>
           </div>
           <div class="settings-control settings-control-inline">
             <span class="settings-switch"><input type="checkbox" id="update-check-enabled" role="switch"></span>
@@ -2963,6 +3005,7 @@
             <button type="button" class="btn btn-indigo" id="update-install-btn" data-i18n-skip hidden></button>
           </div>
         </div>
+        <div id="update-mode-panel" class="update-mode-panel" data-i18n-skip hidden></div>
         <details id="update-notes" class="update-notes" hidden>
           <summary class="disclosure" data-i18n="update.notesTitle">Nouveautés de cette version</summary>
           <div id="update-notes-body" class="update-notes-body" data-i18n-skip></div>
@@ -3484,6 +3527,7 @@ ollama serve</pre>
 <script src="/static/js/app/notebooks.js?v=auto"></script>
 <script src="/static/js/app/notifications.js?v=auto"></script>
 <script src="/static/js/app/citation-graph.js?v=auto"></script>
+<script src="/static/js/app/article-graph.js?v=auto"></script>
 <script src="/static/js/settings.js?v=auto"></script>
 <script src="/static/js/knowledge-graph.js?v=auto"></script>
 <script src="/static/js/static-event-bindings.js?v=auto"></script>

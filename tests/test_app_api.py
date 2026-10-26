@@ -1842,6 +1842,26 @@ def test_citation_graph_expand_route_is_registered(workspace_tmp_dir: Path) -> N
     assert "API externes" in response.json()["msg"]
 
 
+def test_papers_citation_graph_route_validates_and_requires_external_permission(
+    workspace_tmp_dir: Path,
+) -> None:
+    app_api = _load_app_api_module(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+    app_api.get_app_settings = lambda: {"allow_external_api_requests": False}
+    client = TestClient(app_api.app)
+
+    refused = client.post("/api/library/citation-graph", json={"paths": ["papers/a.pdf"]})
+    empty = client.post("/api/library/citation-graph", json={"paths": []})
+    too_many = client.post(
+        "/api/library/citation-graph",
+        json={"paths": [f"papers/{index}.pdf" for index in range(61)]},
+    )
+
+    assert refused.status_code == 403
+    assert refused.json()["error"] == "external_api_permission_required"
+    assert empty.status_code == 422
+    assert too_many.status_code == 422
+
+
 def test_research_scope_citation_routes_require_external_permission(
     workspace_tmp_dir: Path,
 ) -> None:
@@ -3205,6 +3225,42 @@ def test_chat_endpoint_routes_literature_review_intent(
     assert "review ok" in body
 
 
+@pytest.mark.parametrize("endpoint", ["/api/chat", "/api/literature-review"])
+def test_review_stopped_during_the_synthesis_is_saved_as_interrupted(
+    workspace_tmp_dir: Path, monkeypatch: Any, endpoint: str
+) -> None:
+    app_api = _load_app_api_module(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+    chat = app_api.create_conversation(title="Review stop")
+
+    import src.rag.literature_review as literature_review
+
+    def stopped_review(*args: Any, abort_signal: Any = None, **kwargs: Any):
+        yield {"type": "status", "msg": "12 passages, synthèse en cours"}
+        abort_signal.abort("user_stop")
+        # The review generator returns on Stop: no token, no error.
+
+    monkeypatch.setattr(literature_review, "stream_literature_review", stopped_review)
+
+    client = TestClient(app_api.app)
+    with client.stream(
+        "POST",
+        endpoint,
+        json={
+            "chat_id": chat["id"],
+            "message": "fais une revue de litterature sur les pertes AC HTS",
+            "model": "demo-model",
+            "threshold": 0.25,
+            "hint_action": "literature_review",
+        },
+    ) as response:
+        "".join(response.iter_text())
+
+    saved = _last_assistant_message(app_api, chat["id"])
+    assert saved["content"] == "[Réponse interrompue par l'utilisateur]"
+    assert saved["meta"]["interrupted"] is True
+    assert saved["meta"]["interruption_reason"] == "user_stop"
+
+
 def test_chat_endpoint_routes_paper_list_intent(workspace_tmp_dir: Path, monkeypatch: Any) -> None:
     storage_dir = workspace_tmp_dir / "storage"
     data_dir = workspace_tmp_dir / "data"
@@ -3745,10 +3801,78 @@ def test_chat_endpoint_keeps_partial_answer_when_generation_is_interrupted(
     assert unloaded == []
 
 
+# The RAG pipeline turns Stop into an "error" event and returns: the saved
+# answer must still say it was interrupted, before or after the first token.
+@pytest.mark.parametrize("reason", ["user_stop", "context_switch", "page_exit"])
+@pytest.mark.parametrize("tokens", [["Partial ", "answer"], []])
+def test_chat_endpoint_marks_answer_stopped_through_an_error_event(
+    workspace_tmp_dir: Path, monkeypatch: Any, reason: str, tokens: list[str]
+) -> None:
+    app_api = _load_app_api_module(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+    chat = app_api.create_conversation(title="Stopped")
+
+    def fake_stream_chat_api(*args: Any, **kwargs: Any):
+        for token in tokens:
+            yield {"type": "token", "text": token}
+        kwargs["abort_signal"].abort(reason)
+        yield {"type": "error", "msg": "Generation aborted.", "remote_fallback": False}
+
+    monkeypatch.setattr(app_api, "stream_chat_api", fake_stream_chat_api)
+
+    _stream_chat(
+        app_api,
+        {"chat_id": chat["id"], "message": "Question", "model": "demo-model", "hint_action": "answer"},
+    )
+
+    saved = _last_assistant_message(app_api, chat["id"])
+    from src.api.streams import stream_interruption_text
+
+    notice = stream_interruption_text(reason)
+    assert saved["meta"]["interrupted"] is True
+    assert saved["meta"]["interruption_reason"] == reason
+    assert saved["meta"].get("error") is None
+    assert "Erreur" not in saved["content"]
+    if tokens:
+        assert saved["content"].startswith("Partial answer\n\n[Réponse interrompue")
+    else:
+        assert saved["content"].startswith("[Réponse interrompue")
+    assert saved["content"].endswith(notice)
+
+
+def test_chat_endpoint_marks_answer_cut_by_a_provider_error_as_incomplete(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    app_api = _load_app_api_module(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+    chat = app_api.create_conversation(title="Cut")
+
+    def fake_stream_chat_api(*args: Any, **kwargs: Any):
+        yield {"type": "token", "text": "Le champ vaut 1"}
+        yield {"type": "error", "msg": "Réponse incomplète : flux arrêté.", "remote_fallback": False}
+
+    monkeypatch.setattr(app_api, "stream_chat_api", fake_stream_chat_api)
+
+    _stream_chat(
+        app_api,
+        {"chat_id": chat["id"], "message": "Question", "model": "demo-model", "hint_action": "answer"},
+    )
+
+    saved = _last_assistant_message(app_api, chat["id"])
+    assert saved["content"] == (
+        "Le champ vaut 1\n\n[Réponse incomplète : la génération s'est arrêtée sur une erreur]"
+    )
+    assert saved["meta"]["incomplete"] is True
+    assert saved["meta"]["incomplete_reason"] == "Réponse incomplète : flux arrêté."
+    assert saved["meta"].get("interrupted") is None
+
+
 @pytest.mark.parametrize(
     ("tokens", "expected_content", "expected_error_flag"),
     [
-        (["Half answer"], "Half answer", None),
+        (
+            ["Half answer"],
+            "Half answer\n\n[Réponse incomplète : la génération s'est arrêtée sur une erreur]",
+            None,
+        ),
         ([], "Erreur: chat_generation_failed", True),
     ],
 )

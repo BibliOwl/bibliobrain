@@ -2,7 +2,7 @@ from src.chat_term_grounding import ungrounded_terms
 
 # The passage the 3B model cited when it wrote "basés sur l'iode".
 _FE_SC = (
-    "High temperature superconductivity Uchida, Shin-ichi 2015\n"
+    "High temperature superconductivity Durand, Claire 2015\n"
     "Chapter 4 Iron-Based Superconductors. Abstract The iron-based superconductors "
     "(Fe-SCs) comprise a big family having the highest Tc = 55 K. In this family, an "
     "indispensable element is the typical magnetic element Fe, and the common building "
@@ -12,7 +12,7 @@ _FE_SC = (
 
 def test_an_element_no_passage_names_is_listed() -> None:
     answer = (
-        "Uchida (2015) explique que les composés de fer basés sur l'iode atteignent Tc = 55 K [S2]."
+        "Durand (2015) explique que les composés de fer basés sur l'iode atteignent Tc = 55 K [S2]."
     )
     assert ungrounded_terms(answer, [_FE_SC]) == ["iode"]
 

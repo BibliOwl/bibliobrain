@@ -12,7 +12,7 @@ BINDINGS_JS = (ROOT / "static" / "js" / "static-event-bindings.js").read_text(
 
 
 def test_add_source_form_scrolls_into_view_and_receives_focus() -> None:
-    assert "body.scrollTo({top: body.scrollHeight, behavior: 'smooth'})" in APP_JS
+    assert "body.scrollTo({top: body.scrollHeight, behavior: preferredScrollBehavior()})" in APP_JS
     assert "form.querySelector('#nb-source-type')?.focus()" in APP_JS
 
 

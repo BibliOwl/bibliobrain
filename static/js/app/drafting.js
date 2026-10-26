@@ -1155,7 +1155,7 @@ function _draftingRevealSuggestionCard(citationId) {
   const container = _draftingGetResultPanel();
   const card = container?.querySelector(`.drafting-item[data-citation-id="${CSS.escape(String(citationId || ''))}"]`);
   if (!card) return;
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  card.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
   _draftingFlash(card);
 }
 
@@ -1955,7 +1955,7 @@ function revealDraftingBibliographyEntry(number) {
   if (shell && !shell.open) shell.open = true;
   const entry = document.getElementById(`draft-ref-${number}`);
   if (!entry) return;
-  entry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  entry.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
   _draftingFlash(entry);
 }
 
@@ -1964,6 +1964,8 @@ function revealDraftingBibliographyEntry(number) {
 // Sentence texts of the last render, referenced by data-sentence-ref.
 let _draftingGroupSentences = [];
 let _draftingRunTimer = null;
+document.addEventListener('visibilitychange', () => _draftingUpdateRunTimer());
+window.addEventListener('bibliobrain:tabchange', () => _draftingUpdateRunTimer());
 
 const DRAFTING_SENTENCE_REASONS = {
   none: 'Aucune source assez solide',
@@ -2612,6 +2614,7 @@ function _draftingUpdateRunTimer() {
       _draftingUpdateRunTimer();
       return;
     }
+    if (!isVisualUpdateVisible(container)) return;
     const seconds = Math.max(0, Math.round((Date.now() - (current.sentenceStartedAt || current.startedAt)) / 1000));
     const elapsed = container.querySelector('.drafting-run-elapsed');
     if (elapsed) elapsed.textContent = seconds >= 3 ? `· ${seconds} s` : '';
@@ -2650,7 +2653,7 @@ function _draftingScrollRangeIntoView(range) {
   if (!editor || !rect.height) return;
   const box = editor.getBoundingClientRect();
   if (rect.top >= box.top && rect.bottom <= box.bottom) return;
-  editor.scrollBy({ top: rect.top - box.top - editor.clientHeight / 3, behavior: 'smooth' });
+  editor.scrollBy({ top: rect.top - box.top - editor.clientHeight / 3, behavior: preferredScrollBehavior() });
 }
 
 function _draftingRevealSentence(sentenceText) {
@@ -3308,7 +3311,7 @@ async function runDraftingNotebookSearch() {
   _draftingSetReviewBusy(true, 'drafting-notebook-search-btn');
   if (container) {
     container.innerHTML = '<div class="drafting-loading-note"><span class="spinner"></span><span>' + _tr('Recherche dans le carnet…') + '</span></div>';
-    container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    container.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
   }
 
   try {
@@ -3409,7 +3412,7 @@ async function runDraftingProofread() {
   _draftingSetReviewBusy(true, 'drafting-proofread-btn');
   if (container) {
     _renderDraftingProofreadProgress({ percent: 1, msg: _tr('Proofreading the draft…') });
-    container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    container.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
   }
   try {
     const r = await fetch('/api/drafting-proofread', {
@@ -3545,7 +3548,7 @@ async function runDraftingArgumentSuggestions() {
   state.drafting.reviewAbortModel = model;
   _draftingSetReviewBusy(true, 'drafting-arguments-btn');
   const stopProgress = _draftingStartArgumentProgress(container, scope);
-  container?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  container?.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
   try {
     const { response, payload } = await _requestDraftingArgumentSuggestions({
       text,
@@ -3864,7 +3867,7 @@ function insertDraftingArgumentText(index, variant = 'sentence') {
   }
   _draftingSyncFromEditor();
   if (editor) editor.focus();
-  preview.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  preview.scrollIntoView({ block: 'nearest', behavior: preferredScrollBehavior() });
   _draftingFlash(preview);
 }
 
@@ -3936,7 +3939,7 @@ function _draftingRevealArgumentCard(index) {
   setDraftingView('arguments');
   const card = _draftingGetReviewPanel('arguments')?.querySelector(`[data-argument-card="${Number(index)}"]`);
   if (!card) return;
-  card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  card.scrollIntoView({ block: 'nearest', behavior: preferredScrollBehavior() });
   _draftingFlash(card);
 }
 

@@ -1,7 +1,7 @@
 """Questions about one named paper: which paper, and which of its passages.
 
-"Que dit Uchida 2015 sur la supraconductivité à haute température ?" names a
-book of the library, but only the "Uchida (2015)" spelling was recognised.
+"Que dit Durand 2015 sur la supraconductivité à haute température ?" names a
+book of the library, but only the "Durand (2015)" spelling was recognised.
 The search then took twelve passages from anywhere, a 3B model answered from
 the abstract of one chapter and invented "iodine" from "Fe". Here the name
 and year are matched against the library, the question is scoped to that
@@ -37,7 +37,7 @@ def _plain(value: Any) -> str:
 
 
 def named_studies(message: str) -> list[tuple[str, str]]:
-    """``(author, year)`` pairs written as "Uchida 2015", "Kim et al. (2019)"..."""
+    """``(author, year)`` pairs written as "Durand 2015", "Kim et al. (2019)"..."""
     found: list[tuple[str, str]] = []
     for match in _STUDY_RE.finditer(str(message or "")):
         author = _plain(match.group("author"))
@@ -48,7 +48,7 @@ def named_studies(message: str) -> list[tuple[str, str]]:
 
 
 def _family_names(first_author: Any) -> set[str]:
-    """ "Uchida, Shin-ichi" is Uchida; "Shin-ichi Uchida" too."""
+    """ "Durand, Claire" is Durand; "Claire Durand" too."""
     raw = str(first_author or "").strip()
     if not raw:
         return set()
@@ -163,8 +163,8 @@ def _same_word(left: str, right: str) -> bool:
 def overview_share(message: str, title: str, *, studies: Sequence[tuple[str, str]] = ()) -> float:
     """Part of the passages that should cover the whole paper (0 when none).
 
-    "Que dit Uchida 2015 sur la supraconductivité à haute température ?" asks
-    about the book's own subject: two thirds. "Que dit Uchida 2015 sur le
+    "Que dit Durand 2015 sur la supraconductivité à haute température ?" asks
+    about the book's own subject: two thirds. "Que dit Durand 2015 sur le
     dopage ?" names a point of it: a third, the rest from the search.
     """
     text = _plain(message)

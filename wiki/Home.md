@@ -49,8 +49,8 @@ La barre latérale de gauche donne accès à six espaces :
   clic (résumé, méthodes, conclusions…) et les références à copier (APA, BibTeX).
 - **Découverte** : recherche d'articles en ligne (Semantic Scholar, OpenAlex, arXiv,
   HAL, Crossref) et tendances de publication, à votre demande.
-- **Cartographies** : qui cite qui dans votre bibliothèque, une carte par thèmes, et les
-  sources de la dernière réponse du chat.
+- **Cartographies** : le graphe de citations d'articles choisis, une vue d'ensemble de la
+  bibliothèque par thèmes, et les sources de la dernière réponse du chat.
 - **Carnets** : des sous-corpus thématiques avec leurs notes et leur propre chat.
 - **Rédaction** : un éditeur qui propose, phrase par phrase, des sources qui
   soutiennent réellement ce que vous écrivez.

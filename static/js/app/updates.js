@@ -3,6 +3,10 @@
 //  Daily check of a static latest.json (src/update_check.py). Nothing is sent
 //  before the user answered: the setup assistant asks new users, a one-time
 //  card asks existing ones. Installing always takes a click.
+//  Each installation updates its own way: Setup.exe and ZIP installs get the
+//  new package downloaded ahead of time (ZIP installs also get the manual
+//  steps, in case the one-click update fails), Git checkouts get a "git pull"
+//  button (refused while tracked files have local changes).
 // ---------------------------------------------
 const UPDATE_STATUS_REFRESH_MS = 30 * 60 * 1000;
 const UPDATE_JOB_POLL_MS = 1000;
@@ -30,8 +34,23 @@ function _updateFormatDate(iso) {
   return date.toLocaleString(language, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function _updateJobIsForeground(job) {
+  // A background download (installer fetched ahead of the click) is not "working".
+  return ['downloading', 'verifying', 'restarting'].includes(job?.phase) && !job?.background;
+}
+
 function _updateStatusLine(status) {
   if (!status) return '';
+  if (status.update_available && ['packaged', 'zip'].includes(status.install_mode)) {
+    const job = status.job || {};
+    if (status.downloaded) {
+      return _updateT('update.readyLine', { version: status.latest_version, current: status.current_version });
+    }
+    if (job.background && ['downloading', 'verifying'].includes(job.phase)) {
+      const percent = Number.isFinite(job.percent) ? `${job.percent} %` : '';
+      return _updateT('update.backgroundDownloading', { version: status.latest_version, percent });
+    }
+  }
   if (status.update_available) {
     return _updateT('update.available', { version: status.latest_version, current: status.current_version });
   }
@@ -67,14 +86,122 @@ function _updateBlockerText(code) {
     no_installer: 'update.blockedNoInstaller',
     no_archive: 'update.blockedNoArchive',
     busy: 'update.blockedBusy',
+    git_dirty: 'update.blockedGitDirty',
+    git_no_upstream: 'update.blockedGitNoUpstream',
   }[code];
   return key ? _updateT(key) : '';
+}
+
+function _updateEl(tag, { className = '', text = '' } = {}) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text) node.textContent = text;
+  return node;
+}
+
+async function openUpdateInstallFolder(dir) {
+  let ok = false;
+  try {
+    ok = Boolean((await _updateRequest('/api/update/open-folder', { method: 'POST' }))?.ok);
+  } catch (error) {
+    ok = false;
+  }
+  if (!ok) showToast(_updateT('update.zipOpenFolderError', { dir }), 6000, 'error');
+}
+
+function _renderZipGuide(panel, status) {
+  const guide = status.zip_guide || {};
+  const file = guide.file_name || 'Bibliobrain-Windows.zip';
+  const dir = guide.install_dir || '';
+  // A fallback when the one-click update cannot run or did not work.
+  const failed = Boolean(status.install_blocker)
+    || status.job?.phase === 'failed'
+    || status.last_install?.ok === false;
+  const details = _updateEl('details', { className: 'update-zip-manual' });
+  details.open = failed;
+  details.append(_updateEl('summary', { className: 'disclosure', text: _updateT('update.zipTitle') }));
+  panel.append(details);
+  const steps = _updateEl('ol');
+  [
+    _updateT(guide.download_url ? 'update.zipStep1' : 'update.zipStep1Page', { file }),
+    _updateT('update.zipStep2', { dir }),
+    _updateT('update.zipStep3', { file }),
+    _updateT('update.zipStep4'),
+  ].forEach((text) => steps.append(_updateEl('li', { text })));
+  details.append(steps);
+
+  const actions = _updateEl('div', { className: 'update-mode-actions' });
+  if (guide.download_url) {
+    const download = _updateEl('a', { className: 'btn btn-indigo', text: _updateT('update.zipDownload', { file }) });
+    download.href = guide.download_url;
+    download.rel = 'noopener noreferrer';
+    actions.append(download);
+  }
+  if (guide.releases_url) {
+    const page = _updateEl('a', { className: 'btn btn-ghost', text: _updateT('update.notesLink') });
+    page.href = guide.releases_url;
+    page.target = '_blank';
+    page.rel = 'noopener noreferrer';
+    actions.append(page);
+  }
+  const folder = _updateEl('button', { className: 'btn btn-ghost', text: _updateT('update.zipOpenFolder') });
+  folder.type = 'button';
+  folder.addEventListener('click', () => openUpdateInstallFolder(dir));
+  actions.append(folder);
+  details.append(actions);
+}
+
+function _renderGitState(panel, status) {
+  const git = status.git || {};
+  panel.append(_updateEl('h3', { text: _updateT('update.gitTitle') }));
+  let warning = false;
+  if (!git.available) {
+    panel.append(_updateEl('p', { text: _updateT('update.gitMissing') }));
+    warning = true;
+  } else if (!git.branch) {
+    panel.append(_updateEl('p', { text: _updateT('update.gitDetached') }));
+  } else if (!git.upstream) {
+    panel.append(_updateEl('p', { text: _updateT('update.gitNoUpstream', { branch: git.branch }) }));
+  } else {
+    panel.append(_updateEl('p', { text: _updateT('update.gitBranch', { branch: git.branch, upstream: git.upstream }) }));
+  }
+  if (git.change_count) {
+    warning = true;
+    panel.append(_updateEl('p', { text: _updateT('update.gitDirty', { count: git.change_count }) }));
+    const list = _updateEl('ul', { className: 'update-git-changes' });
+    (git.changes || []).forEach((path) => list.append(_updateEl('li', { text: path })));
+    const more = git.change_count - (git.changes || []).length;
+    if (more > 0) list.append(_updateEl('li', { text: _updateT('update.gitDirtyMore', { count: more }) }));
+    panel.append(list);
+  }
+  panel.dataset.state = warning ? 'warning' : '';
+}
+
+function _renderUpdateModePanel(status) {
+  const panel = document.getElementById('update-mode-panel');
+  if (!panel) return;
+  panel.replaceChildren();
+  const showZip = status.install_mode === 'zip' && status.update_available;
+  const showGit = status.install_mode === 'git' && Boolean(status.git);
+  panel.hidden = !(showZip || showGit);
+  panel.dataset.state = '';
+  if (showZip) _renderZipGuide(panel, status);
+  else if (showGit) _renderGitState(panel, status);
+}
+
+function _installButtonLabel(status) {
+  if (status.install_mode === 'git') return _updateT('update.gitPull');
+  if (status.downloaded) {
+    return _updateT('update.installReady', { version: status.latest_version || '' });
+  }
+  return _updateT('update.install', { version: status.latest_version || '' });
 }
 
 function renderUpdateUi(status = _updateStatus) {
   if (!status) return;
   const job = status.job || {};
-  const working = ['downloading', 'verifying', 'restarting'].includes(job.phase);
+  const working = _updateJobIsForeground(job);
+  const isGit = status.install_mode === 'git';
 
   const sidebarButton = document.getElementById('app-update-btn');
   if (sidebarButton) {
@@ -111,16 +238,20 @@ function renderUpdateUi(status = _updateStatus) {
   }
   const installButton = document.getElementById('update-install-btn');
   if (installButton) {
-    installButton.hidden = !status.update_available || Boolean(status.install_blocker);
+    // A Git checkout can pull at any time; the others wait for a release.
+    installButton.hidden = !(status.update_available || isGit) || Boolean(status.install_blocker);
     installButton.disabled = working;
-    installButton.textContent = _updateT('update.install', { version: status.latest_version || '' });
+    installButton.textContent = _installButtonLabel(status);
   }
   const blocker = document.getElementById('update-install-hint');
   if (blocker) {
-    const text = _updateBlockerText(status.install_blocker);
+    // The Git panel and the ZIP steps already say it in full.
+    const explained = ['git_dirty', 'git_no_upstream', 'git_missing'].includes(status.install_blocker);
+    const text = explained ? '' : _updateBlockerText(status.install_blocker);
     blocker.hidden = !text;
     blocker.textContent = text;
   }
+  _renderUpdateModePanel(status);
 }
 
 async function fetchUpdateStatus() {
@@ -243,7 +374,13 @@ async function _pollUpdateProgress() {
   if (status) {
     _updateStatus = status;
     const phase = status.job?.phase;
-    if (status.current_version !== watch.fromVersion) {
+    const install = status.last_install;
+    const finishedAt = Date.parse(install?.finished_at || '');
+    const finishedNow = watch.serverWasDown && install?.ok === true
+      && Number.isFinite(finishedAt) && finishedAt >= watch.startedAt - 5000;
+    // A git pull can bring commits without changing VERSION: the manager's
+    // "ok" result written after this click also means it is done.
+    if (status.current_version !== watch.fromVersion || finishedNow) {
       _setUpdateOverlay({ title: _updateT('update.overlayDone'), text: _updateT('update.overlayReloading') });
       window.setTimeout(() => window.location.reload(), 800);
       return;
@@ -266,13 +403,13 @@ async function _pollUpdateProgress() {
     }
     if (phase === 'downloading') {
       _setUpdateOverlay({
-        title: _updateT('update.overlayTitle', { version: watch.toVersion }),
+        title: watch.title,
         text: _updateT('update.overlayDownloading'),
         percent: Number.isFinite(status.job?.percent) ? status.job.percent : null,
       });
     } else if (phase === 'verifying') {
       _setUpdateOverlay({
-        title: _updateT('update.overlayTitle', { version: watch.toVersion }),
+        title: watch.title,
         text: _updateT('update.overlayVerifying'),
       });
     }
@@ -289,8 +426,8 @@ async function _pollUpdateProgress() {
   if (restarting && !watch.restartShown) {
     watch.restartShown = true;
     _setUpdateOverlay({
-      title: _updateT('update.overlayTitle', { version: watch.toVersion }),
-      text: _updateT('update.overlayRestarting'),
+      title: watch.title,
+      text: watch.restartText,
     });
   }
   watch.timer = window.setTimeout(_pollUpdateProgress, restarting ? UPDATE_RESTART_POLL_MS : UPDATE_JOB_POLL_MS);
@@ -298,7 +435,7 @@ async function _pollUpdateProgress() {
 
 async function startAppUpdate() {
   const status = _updateStatus;
-  if (!status?.update_available) return;
+  if (!status?.update_available && status?.install_mode !== 'git') return;
   const button = document.getElementById('update-install-btn');
   if (button) button.disabled = true;
   let result = null;
@@ -316,7 +453,11 @@ async function startAppUpdate() {
     }
     return;
   }
+  const isGit = status.install_mode === 'git';
+  const ready = Boolean(status.downloaded);
   _updateWatch = {
+    title: isGit ? _updateT('update.gitPull') : _updateT('update.overlayTitle', { version: status.latest_version }),
+    restartText: _updateT(isGit ? 'update.overlayGit' : 'update.overlayRestarting'),
     fromVersion: status.current_version,
     toVersion: status.latest_version,
     startedAt: Date.now(),
@@ -325,9 +466,9 @@ async function startAppUpdate() {
     timer: null,
   };
   _setUpdateOverlay({
-    title: _updateT('update.overlayTitle', { version: status.latest_version }),
-    text: _updateT(status.install_mode === 'git' ? 'update.overlayRestarting' : 'update.overlayDownloading'),
-    percent: status.install_mode === 'git' ? null : 0,
+    title: _updateWatch.title,
+    text: _updateT(isGit ? 'update.overlayGit' : (ready ? 'update.overlayRestarting' : 'update.overlayDownloading')),
+    percent: isGit || ready ? null : 0,
   });
   _pollUpdateProgress();
 }

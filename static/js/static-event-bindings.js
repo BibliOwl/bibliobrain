@@ -55,6 +55,7 @@
     ['clear-library-selection', 'click', function(event) { clearLibrarySelection() }],
     ['ask-chat-about-library-selection', 'click', function(event) { askChatAboutLibrarySelection() }],
     ['open-library-selection-notebook-modal', 'click', function(event) { openLibrarySelectionNotebookModal() }],
+    ['open-article-graph-from-library-selection', 'click', function(event) { openArticleGraphFromLibrarySelection() }],
     ['exclude-library-selection-from-rag', 'click', function(event) { setLibrarySelectionRagExcluded(true) }],
     ['include-library-selection-in-rag', 'click', function(event) { setLibrarySelectionRagExcluded(false) }],
     ['switch-library-detail-tab-overview', 'click', function(event) { switchLibraryDetailTab('overview', this) }],

@@ -85,9 +85,15 @@ On first launch, Bibliobrain asks whether it may check for a new version once a 
 is installed without your click.
 
 - When a release is available, **Update available** appears in the sidebar. It opens
-  **Settings > Expert settings > Diagnostics**, under **Version and updates**.
-  **Update to…** downloads the release, checks it, backs up your data, installs it
-  and restarts Bibliobrain. This works when you started Bibliobrain from its shortcut.
+  **Settings > Expert settings > Diagnostics**, under **Version and updates**. What you
+  find there depends on how Bibliobrain was installed:
+  - **with the installer or the ZIP**: the new release is downloaded and checked ahead
+    of time; **Install version…** backs up your data, installs it and restarts
+    Bibliobrain. This works when you started Bibliobrain from its shortcut. With the ZIP,
+    the steps to do it by hand stay available as a fallback;
+  - **with Git**: **Update (git pull)** fetches the new commits of the tracked branch,
+    then restarts Bibliobrain. The button is blocked while tracked files are modified:
+    commit them (`git commit`) or set them aside (`git stash`) first.
 - The same section contains **Check for updates daily** and **Check now**.
 - To update outside the app, run `Update-Bibliobrain.cmd`. It creates a backup
   first, then asks you to select the new `Bibliobrain-Setup-X.Y.Z.exe`, or the new

@@ -863,8 +863,129 @@ function createChatExportCard(exportFile) {
   return card;
 }
 
+const _lightAssistantStreams = new WeakMap();
+const _lightStreamBlocks = new WeakMap();
+const _pendingLightAssistantStreams = new Map();
+
+// Keep completed blocks (and any text selection) in place. Parse through the
+// same safe Markdown/citation renderer; math and source cards wait for the final render.
+function _updateLightStreamBlock(container, text, options = {}) {
+  const value = String(text || '').trim();
+  let units = [value];
+  // Math spanning blocks and reference definitions require the full context.
+  if (!/\$\$|\\\[|\\\(|^\s*\[[^\]]+\]:/m.test(value)) {
+    if (window.marked?.lexer && window.DOMPurify) {
+      const tokens = window.marked.lexer(value);
+      if (!Object.keys(tokens.links || {}).length) units = tokens.filter(token => token.type !== 'space').map(token => token.raw);
+    } else if (!/```|~~~/.test(value)) {
+      units = value.replace(/\r\n/g, '\n').split(/\n{2,}/).map(block => block.trim()).filter(Boolean);
+    }
+  }
+  const previous = _lightStreamBlocks.get(container) || [];
+  const sources = options.sources?.length ? options.sources : null;
+  const blocks = units.map((unit, index) => {
+    const cached = previous[index];
+    if (cached?.text === unit && cached.sources === sources && cached.nodes.every(node => node.parentNode === container)) return cached;
+    const next = document.createElement('div');
+    renderAssistantMarkdownBlock(next, unit, options);
+    return { text: unit, sources, nodes: [...next.childNodes] };
+  });
+  let current = container.firstChild;
+  for (const block of blocks) {
+    for (const child of block.nodes) {
+      if (current === child) current = current.nextSibling;
+      else container.insertBefore(child, current);
+    }
+  }
+  while (current) {
+    const following = current.nextSibling;
+    current.remove();
+    current = following;
+  }
+  _lightStreamBlocks.set(container, blocks);
+}
+
+function _renderLightAssistantStream(root, source, options) {
+  let view = _lightAssistantStreams.get(root);
+  if (!view || view.wrapper.parentNode !== root) {
+    const thinkingWasOpen = Boolean(root.querySelector('.thinking-block[open]'));
+    root.replaceChildren();
+    root.style.whiteSpace = '';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'assistant-rich-response';
+    const thinking = document.createElement('details');
+    thinking.className = 'thinking-block is-live';
+    thinking.open = thinkingWasOpen || Boolean(options.openThinking);
+    const summary = document.createElement('summary');
+    summary.className = 'thinking-summary';
+    summary.innerHTML = '<span class="thinking-summary-text"><span class="thinking-dot"></span><span class="thinking-label">Thinking</span></span>';
+    const panel = document.createElement('div');
+    panel.className = 'thinking-panel';
+    panel.setAttribute('data-i18n-skip', '');
+    thinking.append(summary, panel);
+    const answer = document.createElement('div');
+    answer.className = 'assistant-answer';
+    answer.setAttribute('data-i18n-skip', '');
+    wrapper.append(thinking, answer);
+    root.appendChild(wrapper);
+    view = { wrapper, thinking, panel, answer, thinkingText: '', renderedThinking: null, answerText: null };
+    _lightAssistantStreams.set(root, view);
+    thinking.addEventListener('toggle', () => {
+      if (thinking.open && view.renderedThinking !== view.thinkingText) {
+        _updateLightStreamBlock(panel, view.thinkingText);
+        view.renderedThinking = view.thinkingText;
+      }
+    });
+  }
+  const parts = splitThinkingContent(source);
+  view.thinking.hidden = !parts.thinking;
+  view.thinkingText = parts.thinking;
+  if (view.thinking.open && view.renderedThinking !== parts.thinking) {
+    _updateLightStreamBlock(view.panel, parts.thinking);
+    view.renderedThinking = parts.thinking;
+  }
+  const answer = options.normalizeCitations
+    ? normalizeAssistantCitations(parts.answer, options.sources || []) : parts.answer;
+  if (view.answerText !== answer) {
+    _updateLightStreamBlock(view.answer, answer, { sources: options.sources || [] });
+    view.answerText = answer;
+  }
+  if (!answer) {
+    const placeholder = _tr(options.emptyText || 'Réponse en préparation…');
+    if (view.answer.textContent !== placeholder) view.answer.textContent = placeholder;
+  }
+  root.dataset.copyText = buildAssistantCopyText(source, options);
+  _upsertChatCopyButton(root);
+}
+
+function _flushLightAssistantStreams() {
+  for (const [root, pending] of _pendingLightAssistantStreams) {
+    // A finished/failed stream or a closed conversation must never be resurrected.
+    if (!root.isConnected || root.firstChild !== pending.firstChild || root.className !== pending.className) {
+      _pendingLightAssistantStreams.delete(root);
+    } else if (isVisualUpdateVisible(root)) {
+      _pendingLightAssistantStreams.delete(root);
+      renderRichAssistantOutput(root, pending.source, pending.options);
+    }
+  }
+}
+document.addEventListener('visibilitychange', _flushLightAssistantStreams);
+window.addEventListener('bibliobrain:tabchange', _flushLightAssistantStreams);
+window.addEventListener('bibliobrain:performancechange', _flushLightAssistantStreams);
+
 function renderRichAssistantOutput(root, source, options = {}) {
   if (!root) return;
+  _pendingLightAssistantStreams.delete(root);
+  if (options.streaming && isLightPerformanceMode()
+      && !options.discoverySession && !options.externalSearchConfirmation && !options.exportFile) {
+    if (!isVisualUpdateVisible(root)) {
+      _pendingLightAssistantStreams.set(root, { source, options, firstChild: root.firstChild, className: root.className });
+      return;
+    }
+    _renderLightAssistantStream(root, source, options);
+    return;
+  }
+  _lightAssistantStreams.delete(root);
   const previousThinkingOpen = Boolean(root.querySelector('.thinking-block[open]'));
   const previousSourcesOpen = Boolean(root.querySelector('.assistant-sources-block[open]'));
   const parts = splitThinkingContent(source);

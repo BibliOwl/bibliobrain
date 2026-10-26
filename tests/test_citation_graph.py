@@ -143,154 +143,6 @@ def test_citation_graph_handles_empty_notebook(
     assert payload["missing_links"] == []
 
 
-def test_library_internal_citation_graph_keeps_only_library_articles(
-    workspace_tmp_dir: Path, monkeypatch: Any
-) -> None:
-    _, citation_graph = _load_modules(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
-    paths = ["papers/a.pdf", "papers/b.pdf", "papers/c.pdf", "papers/no-doi.pdf"]
-    rows = [["A"], ["B"], ["C"], ["Sans DOI"]]
-    items = {
-        "papers/a.pdf": ZoteroItem(item_key="A", title="A", doi="10.1/a"),
-        "papers/b.pdf": ZoteroItem(item_key="B", title="B", doi="10.1/b"),
-        "papers/c.pdf": ZoteroItem(item_key="C", title="C", doi="10.1/c"),
-        "papers/no-doi.pdf": ZoteroItem(item_key="D", title="Sans DOI", doi=""),
-    }
-    monkeypatch.setattr(citation_graph, "list_library", lambda indexed_only=True: (rows, paths))
-    monkeypatch.setattr(citation_graph, "_lookup_zotero", lambda rel: items.get(rel))
-
-    fetch_calls = 0
-
-    async def fake_doi_fetch(client: Any, dois: list[str]) -> list[dict[str, Any]]:
-        nonlocal fetch_calls
-        fetch_calls += 1
-        works = {
-            "10.1/a": _fake_oa_work("W1", "10.1/a", refs=["W2", "Wexternal"]),
-            "10.1/b": _fake_oa_work("W2", "10.1/b", refs=[]),
-            "10.1/c": _fake_oa_work("W3", "10.1/c", refs=["W1"]),
-        }
-        return [citation_graph._normalize_oa_work(works[doi]) for doi in dois]
-
-    monkeypatch.setattr(citation_graph, "_fetch_works_by_doi", fake_doi_fetch)
-
-    import asyncio
-
-    payload = asyncio.run(citation_graph.build_library_internal_citation_graph())
-    cached_payload = asyncio.run(citation_graph.build_library_internal_citation_graph())
-
-    assert payload["graph_type"] == "library_citations"
-    assert {node["id"] for node in payload["nodes"]} == {"W1", "W2", "W3"}
-    assert {(edge["source"], edge["target"]) for edge in payload["edges"]} == {
-        ("W1", "W2"),
-        ("W3", "W1"),
-    }
-    assert all("Wexternal" not in (edge["source"], edge["target"]) for edge in payload["edges"])
-    assert payload["stats"]["connected_articles"] == 3
-    assert payload["stats"]["connected_components"] == 1
-    assert payload["stats"]["largest_component"] == 3
-    assert payload["stats"]["edges_count"] == 2
-    assert payload["stats"]["unresolved_articles"] == 1
-    assert payload["skipped_sources"][0]["reason"] == "Pas de DOI dans Zotero"
-    assert {node["component_id"] for node in payload["nodes"]} == {0}
-    assert {node["component_size"] for node in payload["nodes"]} == {3}
-    assert payload["stats"]["communities_count"] == 1
-    assert payload["stats"]["largest_community"] == 3
-    assert payload["communities"][0]["node_ids"] == ["W1", "W2", "W3"]
-    assert {node["community_id"] for node in payload["nodes"]} == {0}
-    assert fetch_calls == 1
-    assert cached_payload["stats"]["cached"] is True
-
-
-def test_library_citation_graph_lazily_restores_zotero_metadata(
-    workspace_tmp_dir: Path, monkeypatch: Any
-) -> None:
-    _, citation_graph = _load_modules(
-        workspace_tmp_dir / "storage",
-        workspace_tmp_dir / "data",
-    )
-    item = ZoteroItem(item_key="A", title="Paper A", doi="10.1/a")
-    loaded = False
-    init_calls: list[str] = []
-
-    monkeypatch.setattr(
-        citation_graph,
-        "list_library",
-        lambda indexed_only=True: ([["Paper A"]], ["papers/a.pdf"]),
-    )
-    monkeypatch.setattr(
-        citation_graph,
-        "_lookup_zotero",
-        lambda rel_path: item if loaded and rel_path == "papers/a.pdf" else None,
-    )
-    monkeypatch.setattr(citation_graph.config, "ZOTERO_DB_PATH", "zotero.sqlite")
-    monkeypatch.setattr(citation_graph.library_module, "_zotero_library", {})
-
-    def fake_init_zotero(path: str = "") -> str:
-        nonlocal loaded
-        loaded = True
-        init_calls.append(path)
-        return "Zotero OK"
-
-    monkeypatch.setattr(citation_graph.library_module, "init_zotero", fake_init_zotero)
-
-    resolved, skipped = citation_graph._resolve_indexed_library_sources()
-
-    assert init_calls == ["zotero.sqlite"]
-    assert [record["doi"] for record in resolved] == ["10.1/a"]
-    assert skipped == []
-
-
-def test_connected_components_keep_isolates_neutral_and_split_groups(
-    workspace_tmp_dir: Path,
-) -> None:
-    _, citation_graph = _load_modules(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
-    component_by_node, sizes = citation_graph._connected_component_metadata(
-        {"A", "B", "C", "D", "E", "F"},
-        {("A", "B"), ("B", "C"), ("D", "E")},
-    )
-
-    assert component_by_node["A"] == component_by_node["B"] == component_by_node["C"] == 0
-    assert component_by_node["D"] == component_by_node["E"] == 1
-    assert component_by_node["F"] == -1
-    assert sizes == {0: 3, 1: 2, -1: 1}
-
-
-def test_citation_communities_split_a_large_connected_component(
-    workspace_tmp_dir: Path,
-) -> None:
-    _, citation_graph = _load_modules(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
-    first = {f"A{i}" for i in range(6)}
-    second = {f"B{i}" for i in range(6)}
-    edge_pairs = {
-        (source, target)
-        for group in (sorted(first), sorted(second))
-        for index, source in enumerate(group)
-        for target in group[index + 1 :]
-    }
-    edge_pairs.add(("A0", "B0"))
-    node_ids = first | second | {"ISO"}
-    works = {
-        node_id: {
-            "title": ("Magnet superconducting coil" if node_id.startswith("A") else "Neural citation retrieval"),
-            "year": 2020,
-        }
-        for node_id in node_ids
-    }
-    degrees = {node_id: 1 for node_id in node_ids}
-
-    communities, community_by_node, aggregate_edges = citation_graph._build_citation_communities(
-        node_ids,
-        edge_pairs,
-        works,
-        degrees,
-    )
-
-    assert len(communities) == 2
-    assert {community["size"] for community in communities} == {6}
-    assert community_by_node["A0"] != community_by_node["B0"]
-    assert "ISO" not in community_by_node
-    assert sum(edge["count"] for edge in aggregate_edges) == 1
-
-
 def test_citation_graph_emits_similarity_edges_from_shared_refs(
     workspace_tmp_dir: Path, monkeypatch: Any
 ) -> None:
@@ -1062,3 +914,70 @@ def test_paper_lookup_hints_split_zotero_filenames_in_linear_time() -> None:
     started = time.monotonic()
     _paper_lookup_hints("a" + " " * 100_000 + "b.pdf", None)
     assert time.monotonic() - started < 2.0
+
+
+def test_papers_graph_draws_several_library_papers_with_the_notebook_builder(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    _, citation_graph = _load_modules(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+
+    items = {
+        "papers/a.pdf": ZoteroItem(item_key="A", title="Paper A", doi="10.1/a"),
+        "papers/b.pdf": ZoteroItem(item_key="B", title="Paper B", doi="10.1/b"),
+    }
+    monkeypatch.setattr(citation_graph, "_lookup_zotero", lambda rel: items.get(rel))
+
+    async def fake_doi_fetch(client: Any, dois: list[str]) -> list[dict[str, Any]]:
+        assert sorted(dois) == ["10.1/a", "10.1/b"]
+        return [
+            citation_graph._normalize_oa_work(_fake_oa_work("Wa", "10.1/a", refs=["Wb"], title="Paper A")),
+            citation_graph._normalize_oa_work(_fake_oa_work("Wb", "10.1/b", refs=[], title="Paper B")),
+        ]
+
+    async def no_works(client: Any, oa_ids: list[str]) -> list[dict[str, Any]]:
+        return []
+
+    async def no_citers(client: Any, oa_id: str, limit: int = 30) -> list[dict[str, Any]]:
+        return []
+
+    async def no_title_match(client: Any, title: str, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(citation_graph, "_fetch_works_by_doi", fake_doi_fetch)
+    monkeypatch.setattr(citation_graph, "_fetch_works_by_oa_ids", no_works)
+    monkeypatch.setattr(citation_graph, "_fetch_top_citers", no_citers)
+    monkeypatch.setattr(citation_graph, "_fetch_work_by_title", no_title_match)
+
+    import asyncio
+
+    payload = asyncio.run(
+        citation_graph.build_papers_citation_graph(
+            ["papers/a.pdf", "papers/b.pdf", "papers/a.pdf", "papers/unknown.pdf"]
+        )
+    )
+
+    assert payload["ok"] is True
+    assert sorted(node["id"] for node in payload["nodes"]) == ["Wa", "Wb"]
+    assert {"source": "Wa", "target": "Wb"} in payload["edges"]
+    assert [skip["title"] for skip in payload["skipped_sources"]] == ["unknown"]
+
+
+def test_papers_graph_keeps_the_single_paper_view_and_refuses_empty_or_huge_lists(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    _, citation_graph = _load_modules(workspace_tmp_dir / "storage", workspace_tmp_dir / "data")
+    calls: list[str] = []
+
+    async def fake_single(rel_path: str) -> dict[str, Any]:
+        calls.append(rel_path)
+        return {"ok": True, "nodes": []}
+
+    monkeypatch.setattr(citation_graph, "build_paper_citation_graph", fake_single)
+
+    import asyncio
+
+    assert asyncio.run(citation_graph.build_papers_citation_graph(["papers/a.pdf", " papers/a.pdf "]))["ok"] is True
+    assert calls == ["papers/a.pdf"]
+    assert asyncio.run(citation_graph.build_papers_citation_graph([]))["ok"] is False
+    too_many = [f"papers/{index}.pdf" for index in range(citation_graph.PAPERS_GRAPH_MAX_PATHS + 1)]
+    assert asyncio.run(citation_graph.build_papers_citation_graph(too_many))["ok"] is False

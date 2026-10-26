@@ -663,15 +663,72 @@ def _validate_sqlite_path(db_path: str) -> str:
     return resolved_path
 
 
-def _open_db(db_path: str) -> sqlite3.Connection:
-    """Ouvre la base SQLite en lecture seule apres validation stricte du chemin."""
+# A WAL file holds at least its 32-byte header; frames follow it.
+_WAL_HEADER_BYTES = 32
+
+
+def _has_pending_wal(db_path: str) -> bool:
+    try:
+        return os.path.getsize(f"{db_path}-wal") > _WAL_HEADER_BYTES
+    except OSError:
+        return False
+
+
+def _copy_with_wal(db_path: str, folder: str) -> str:
+    """Copy ``db_path`` and its WAL (when present) into ``folder``."""
+    copy_path = os.path.join(folder, "zotero.sqlite")
+    shutil.copyfile(db_path, copy_path)
+    try:
+        shutil.copyfile(f"{db_path}-wal", f"{copy_path}-wal")
+    except FileNotFoundError:
+        pass
+    return copy_path
+
+
+class _CopyConnection(sqlite3.Connection):
+    """Connection to a private copy of the database, deleted on close."""
+
+    copy_folder = ""
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            if self.copy_folder:
+                shutil.rmtree(self.copy_folder, ignore_errors=True)
+                self.copy_folder = ""
+
+
+def _open_db(db_path: str, *, private_copy: bool = False) -> sqlite3.Connection:
+    """Ouvre la base SQLite en lecture seule apres validation stricte du chemin.
+
+    Zotero keeps its database locked while it runs, so the live file is read
+    as immutable. An immutable read ignores the WAL, where SQLite keeps
+    committed changes until a checkpoint: when the WAL holds frames, a private
+    copy of the database and its WAL is read instead, so those changes count.
+    ``private_copy`` marks a file that is already such a copy.
+    """
     safe_path = _validate_sqlite_path(db_path)
-    conn = sqlite3.connect(
-        f"file:{safe_path}?mode=ro&immutable=1",
-        uri=True,
-        check_same_thread=False,
-        timeout=5.0,
-    )
+    if private_copy:
+        conn = sqlite3.connect(safe_path, check_same_thread=False, timeout=5.0)
+    elif _has_pending_wal(safe_path):
+        folder = tempfile.mkdtemp(prefix="bibliobrain-zotero-")
+        try:
+            copy_path = _copy_with_wal(safe_path, folder)
+            conn = sqlite3.connect(
+                copy_path, check_same_thread=False, timeout=5.0, factory=_CopyConnection
+            )
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        conn.copy_folder = folder
+    else:
+        conn = sqlite3.connect(
+            f"file:{safe_path}?mode=ro&immutable=1",
+            uri=True,
+            check_same_thread=False,
+            timeout=5.0,
+        )
     conn.row_factory = sqlite3.Row
     conn.text_factory = lambda value: value.decode("utf-8", errors="ignore")
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -1195,9 +1252,8 @@ def load_zotero_library(
         _logger.warning("Zotero database read failed (%s); retrying from a copy", exc)
     time.sleep(_ZOTERO_RETRY_DELAY_SECONDS)
     with tempfile.TemporaryDirectory(prefix="bibliobrain-zotero-") as folder:
-        copy_path = os.path.join(folder, "zotero.sqlite")
         try:
-            shutil.copyfile(_validate_sqlite_path(db_path), copy_path)
+            copy_path = _copy_with_wal(_validate_sqlite_path(db_path), folder)
             return _load_zotero_sqlite_library(
                 db_path, dropped_pdfs, include_standalone, read_path=copy_path
             )
@@ -1223,7 +1279,7 @@ def _load_zotero_sqlite_library(
     Paths to the attachments are always resolved next to ``db_path``.
     """
     try:
-        conn = _open_db(read_path or db_path)
+        conn = _open_db(read_path or db_path, private_copy=bool(read_path))
         cur = conn.cursor()
     except sqlite3.OperationalError as exc:
         msg = str(exc).lower()

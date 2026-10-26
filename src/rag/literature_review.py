@@ -693,6 +693,7 @@ def _invoke_review(
     model_name: str,
     overhead_tokens: int,
     language: str = _DEFAULT_REVIEW_LANGUAGE,
+    abort_signal: Any = None,
 ) -> LiteratureReview:
     from src.llm_provider import invoke_structured_chat
 
@@ -714,6 +715,7 @@ def _invoke_review(
                 [{"role": "user", "content": prompt}],
                 response_model=review_model,
                 context_tokens_hint=context_tokens,
+                abort_signal=abort_signal,
             )
         except RuntimeError as exc:
             if "structured fields were empty" not in str(exc):
@@ -742,8 +744,12 @@ def _generate_review_events(
     docs: list[Any],
     model_name: str,
     language: Any = None,
+    abort_signal: Any = None,
 ):
     """Yield progress strings; return ``(review, used_docs, labels)``.
+
+    ``abort_signal`` reaches every LLM call: Stop then ends the generation
+    in progress (``InterruptedError``) instead of waiting for it.
 
     A single call is used whenever the whole corpus fits the context window.
     Otherwise the papers are split into context-sized batches, synthesised
@@ -768,7 +774,9 @@ def _generate_review_events(
     budget = _review_input_budget(_resolve_review_context(model_name, required))
 
     if required <= budget:
-        review = _invoke_review(user_query, blocks, model_name, overhead, language)
+        review = _invoke_review(
+            user_query, blocks, model_name, overhead, language, abort_signal=abort_signal
+        )
         used_docs = [doc for block in blocks for doc in block["docs"]]
         return review, used_docs, labels
 
@@ -792,7 +800,11 @@ def _generate_review_events(
             total=len(batches),
             papers=len(batch),
         )
-        partials.append(_invoke_review(user_query, batch, model_name, overhead, language))
+        partials.append(
+            _invoke_review(
+                user_query, batch, model_name, overhead, language, abort_signal=abort_signal
+            )
+        )
 
     used_docs = [doc for block in used_blocks for doc in block["docs"]]
     used_labels = [str(block["label"]) for block in used_blocks]
@@ -814,9 +826,12 @@ def _generate_review_events(
                 [{"role": "user", "content": merge_prompt}],
                 response_model=review_model,
                 context_tokens_hint=_estimate_tokens(merge_prompt),
+                abort_signal=abort_signal,
             )
             if isinstance(merged, LiteratureReview):
                 return merged, used_docs, used_labels
+        except InterruptedError:
+            raise
         except Exception:
             _logger.exception("literature review merge pass failed, merging locally")
 
@@ -943,6 +958,7 @@ def stream_literature_review(
         docs=docs,
         model_name=model_name,
         language=review_language,
+        abort_signal=abort_signal,
     )
     try:
         while True:
@@ -955,7 +971,12 @@ def stream_literature_review(
                 events.close()
                 return
             yield {"type": "status", "msg": progress}
+    except InterruptedError:
+        # Stop during the synthesis: the caller saves the interruption.
+        return
     except Exception as exc:
+        if _check_abort():
+            return
         _logger.exception("literature review synthesis failed")
         yield {"type": "error", "msg": strings["synthesis_failed"].format(error=exc)}
         return

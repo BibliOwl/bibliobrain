@@ -5,17 +5,26 @@ English · [Français](Cartographies.md) · [Guide home](Home-en.md)
 The **Maps** tab helps you navigate your corpus and understand where chat answers
 come from. Choose between four views at the top of the tab.
 
-<!-- TODO screenshot: Who cites whom view -->
+<!-- TODO screenshot: From papers view -->
 
-## Who cites whom
+## From papers
 
-Explore citations connecting papers in your library, grouped into communities.
-Click a paper to isolate its direct citations; double-click to open it in the
-Library. This view needs online search through OpenAlex (see below).
+Pick one or more papers from your library, then choose **Build the graph** to see
+their citation graph (see below) right in the tab.
 
-## Topics
+- **Add a paper** searches the library by title, author or year; **Enter** adds
+  the first result.
+- Three buttons add the **Library selection**, the **Sources of the last answer**
+  or the **Papers from a notebook** in one go.
+- Up to 60 papers. **Change papers** goes back to the picker and keeps your choice.
+- In the Library, select papers and choose **Citation graph** in the selection
+  bar: the tab opens and the graph is built straight away.
 
-A map of your papers by topic, useful for navigating a large corpus.
+This view needs online search through OpenAlex (see below).
+
+## Overview
+
+A map of your whole library by topic, useful for navigating a large corpus.
 
 - **Search for a concept** filters the map.
 - **Reset** returns to the overview.
@@ -38,14 +47,14 @@ publications.
 
 ## Citation graphs
 
-You can open a citation graph for a paper from the Library, for a notebook, or for
-an author or laboratory. These graphs use OpenAlex, so online search must be
+You can open a citation graph for a paper from the Library, for a notebook, for
+papers you pick (**From papers** view), or for an author or laboratory. These graphs use OpenAlex, so online search must be
 allowed. Time runs from left to right:
 
 - **One paper**: its references are on the left (**← What it cites**), the paper is
   in the centre, and works citing it are on the right (**Who cites it →**).
   Position indicates the year; point size indicates the total citation count.
-- **Several papers** (notebook or author): three bands show references, corpus
+- **Several papers** (picked papers, notebook or author): three bands show references, corpus
   papers and citing works on a shared timeline. Point size indicates the number
   of links in this graph.
 - Filters at the top hide references, citing works or internal links. Use

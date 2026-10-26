@@ -2542,6 +2542,32 @@ def _remote_streaming_enabled() -> bool:
 _STREAM_FINISH_REASONS = {"stop", "length", "tool_calls", "content_filter", "function_call"}
 
 
+class IncompleteStreamError(RuntimeError):
+    """An OpenAI-compatible stream ended before its final chunk.
+
+    Such a stream closes with a chunk that carries ``finish_reason`` (then
+    ``data: [DONE]``). A connection closed without it is a cut answer, even
+    when the HTTP layer saw a clean end, and must not be kept as a complete one.
+    """
+
+
+INCOMPLETE_STREAM_MESSAGE = (
+    "Réponse incomplète : le fournisseur a arrêté le flux avant son signal de fin."
+)
+
+
+def _uses_openai_compatible_stream(llm: Any) -> bool:
+    # ChatOpenAI and its subclasses; matched by name to keep langchain_openai lazy.
+    return any(cls.__name__ == "ChatOpenAI" for cls in type(llm).__mro__)
+
+
+def _chunk_finish_reason(chunk: Any) -> str:
+    metadata = getattr(chunk, "response_metadata", None)
+    if isinstance(metadata, dict):
+        return str(metadata.get("finish_reason") or "")
+    return ""
+
+
 def _stream_chat_completion(
     client: Any,
     create_kwargs: dict[str, Any],
@@ -2573,6 +2599,8 @@ def _stream_chat_completion(
         close = getattr(stream, "close", None)
         if callable(close):
             close()
+    if not finish_reason:
+        raise IncompleteStreamError(INCOMPLETE_STREAM_MESSAGE)
     return ChatCompletion.model_validate({
         "id": completion_id or "streamed",
         "object": "chat.completion",
@@ -3835,6 +3863,8 @@ def stream_text(
     model_name = _resolve_llm_model_name(llm)
     watchdog_seconds = _ollama_watchdog_seconds()
     deadline = time.monotonic() + watchdog_seconds if model_name and is_ollama_provider() else None
+    check_finish = _uses_openai_compatible_stream(llm)
+    finish_reason = ""
     try:
         for chunk in llm.stream(prompt):
             if abort_signal is not None and abort_signal.is_aborted():
@@ -3845,9 +3875,13 @@ def stream_text(
                 raise TimeoutError(
                     "Generation Ollama interrompue par guardrail " f"(>{watchdog_seconds:.0f}s)."
                 )
+            if check_finish:
+                finish_reason = _chunk_finish_reason(chunk) or finish_reason
             text = _extract_text(chunk)
             if text:
                 yield text
+        if check_finish and not finish_reason:
+            raise IncompleteStreamError(INCOMPLETE_STREAM_MESSAGE)
     except InterruptedError:
         raise
     except Exception:

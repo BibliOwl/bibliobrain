@@ -1,4 +1,9 @@
 // Apply theme and performance preferences before the first paint.
+function preferredScrollBehavior() {
+  return document.documentElement.getAttribute('data-performance-mode') === 'light'
+    || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+}
+
 (function applyEarlyPreferences() {
   try {
     const pref = localStorage.getItem('iassistant_theme') || 'dark';

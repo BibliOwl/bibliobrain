@@ -132,3 +132,43 @@ def test_chat_source_summary_label_has_no_vertical_offset() -> None:
         1
     ].split("}", maxsplit=1)[0]
     assert "margin-bottom: 0;" in scoped_rule
+
+
+def test_pdf_source_opens_the_page_it_displays() -> None:
+    # Codex audit BB-03 (2026-10-25): the card said "Page 126" while its
+    # button opened #page=125, because PDF pages are indexed from 0.
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the frontend page-number regression test")
+
+    source = read_app_javascript()
+    functions = "\n\n".join(
+        _extract_js_function(source, name)
+        for name in ("sourcePageNumber", "sourcePageLabel", "sourceOpenDocumentUrl")
+    )
+    samples = {
+        "labelled": {"page": 125, "content_type": "pdf_page", "location_label": "Page 126"},
+        "first": {"page": 0, "content_type": "pdf_page", "location_label": "Page 1"},
+        "old_index": {"page": "125"},
+        "no_page": {"page": "?"},
+        "slide": {"page": 4, "content_type": "presentation_slide", "location_label": "Diapositive 4"},
+    }
+    script = f"""
+{functions}
+const samples = {json.dumps(samples)};
+const result = {{}};
+for (const [name, source] of Object.entries(samples)) {{
+  result[name] = [sourcePageLabel(source), sourceOpenDocumentUrl(source, 'a.pdf')];
+}}
+console.log(JSON.stringify(result));
+"""
+    completed = subprocess.run(
+        [node, "-e", script], check=True, capture_output=True, text=True, encoding="utf-8", cwd=ROOT
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["labelled"] == ["Page 126", "/api/open-pdf?path=a.pdf#page=126"]
+    assert result["first"] == ["Page 1", "/api/open-pdf?path=a.pdf#page=1"]
+    assert result["old_index"] == ["p.126", "/api/open-pdf?path=a.pdf#page=126"]
+    assert result["no_page"] == ["", "/api/open-pdf?path=a.pdf"]
+    assert result["slide"] == ["Diapositive 4", "/api/open-pdf?path=a.pdf"]

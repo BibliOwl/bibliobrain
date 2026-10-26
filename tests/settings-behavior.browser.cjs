@@ -149,7 +149,7 @@ async function main() {
       window.openStartupAssistant = () => {};
       window.switchTab = name => { window.openedTab = name; };
     });
-    for (const script of ['event-bindings.js', 'i18n.js', 'app/settings-panel.js', 'settings.js', 'static-event-bindings.js']) {
+    for (const script of ['boot.js', 'event-bindings.js', 'i18n.js', 'app/settings-panel.js', 'settings.js', 'static-event-bindings.js']) {
       await page.addScriptTag({ url: `/static/js/${script}` });
     }
     await page.evaluate(async () => {

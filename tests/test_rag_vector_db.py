@@ -2768,14 +2768,14 @@ _FE_SC_DOCS = [
             "element is the typical magnetic element Fe."
         ),
         metadata={
-            "source": "L6EDW2A4/Uchida - 2015.pdf",
+            "source": "ABCD1234/Durand - 2015.pdf",
             "page": 67,
             "zotero_title": "High temperature superconductivity",
             "zotero_year": "2015",
         },
     ),
 ]
-_IODINE_ANSWER = "Uchida décrit des composés de fer basés sur l'iode, avec Tc = 55 K [S1]."
+_IODINE_ANSWER = "Durand décrit des composés de fer basés sur l'iode, avec Tc = 55 K [S1]."
 
 
 def test_stream_chat_api_lists_an_element_no_passage_names(
@@ -2789,7 +2789,7 @@ def test_stream_chat_api_lists_an_element_no_passage_names(
 
     monkeypatch.setattr(rag.query_engine, "invoke_structured_chat", failing_repair)
     events, _ = _stream_with_fake_answer(
-        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Uchida sur les Fe-SCs ?"
+        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Durand sur les Fe-SCs ?"
     )
 
     answer = _final_answer(events)
@@ -2810,16 +2810,16 @@ def test_stream_chat_api_rewrites_an_invented_element_with_the_source_term(
     def repair(_model: str, messages: list[dict[str, str]], **_kwargs: Any) -> Any:
         prompts.append(messages[-1]["content"])
         return rag.query_engine.ChatAnswer(
-            answer="Uchida décrit des supraconducteurs à base de fer (Fe-SCs), avec Tc = 55 K [S1]."
+            answer="Durand décrit des supraconducteurs à base de fer (Fe-SCs), avec Tc = 55 K [S1]."
         )
 
     monkeypatch.setattr(rag.query_engine, "invoke_structured_chat", repair)
     events, _ = _stream_with_fake_answer(
-        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Uchida sur les Fe-SCs ?"
+        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Durand sur les Fe-SCs ?"
     )
 
     answer = _final_answer(events)
-    assert answer == "Uchida décrit des supraconducteurs à base de fer (Fe-SCs), avec Tc = 55 K [S1]."
+    assert answer == "Durand décrit des supraconducteurs à base de fer (Fe-SCs), avec Tc = 55 K [S1]."
     assert "« iode »" in prompts[0]
 
 
@@ -2832,11 +2832,11 @@ def test_stream_chat_api_keeps_the_answer_when_the_rewrite_adds_a_figure(
         rag.query_engine,
         "invoke_structured_chat",
         lambda *_a, **_k: rag.query_engine.ChatAnswer(
-            answer="Uchida décrit des composés de fer avec Tc = 77 K [S1]."
+            answer="Durand décrit des composés de fer avec Tc = 77 K [S1]."
         ),
     )
     events, _ = _stream_with_fake_answer(
-        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Uchida sur les Fe-SCs ?"
+        rag, monkeypatch, _FE_SC_DOCS, _IODINE_ANSWER, "Que dit Durand sur les Fe-SCs ?"
     )
 
     answer = _final_answer(events)
@@ -2879,10 +2879,10 @@ def test_a_named_study_scopes_the_search_to_its_paper(
         lambda filters=None: [
             SimpleNamespace(
                 metadata={
-                    "zotero_first_author": "Uchida, Shin-ichi",
+                    "zotero_first_author": "Durand, Claire",
                     "zotero_year": "2015",
                     "zotero_title": "High temperature superconductivity",
-                    "rel_path": "L6EDW2A4/Uchida - 2015.pdf",
+                    "rel_path": "ABCD1234/Durand - 2015.pdf",
                 }
             )
         ],
@@ -2896,7 +2896,7 @@ def test_a_named_study_scopes_the_search_to_its_paper(
     monkeypatch.setattr(rag.query_engine, "retrieve_for_question", fake_retrieve)
     events, docs = _drain_generator(
         rag.query_engine._stream_retrieval(
-            "Que dit Uchida 2015 sur le dopage ?",
+            "Que dit Durand 2015 sur le dopage ?",
             "demo-model",
             0.2,
             6,
@@ -2909,8 +2909,8 @@ def test_a_named_study_scopes_the_search_to_its_paper(
         )
     )
 
-    assert seen[0]["sources"] == ["L6EDW2A4/Uchida - 2015.pdf"]
-    assert any("Uchida - 2015.pdf" in str(e.get("msg", "")) for e in events)
+    assert seen[0]["sources"] == ["ABCD1234/Durand - 2015.pdf"]
+    assert any("Durand - 2015.pdf" in str(e.get("msg", "")) for e in events)
 
 
 def _drain_generator(gen: Any) -> tuple[list[dict[str, Any]], Any]:
@@ -2930,7 +2930,7 @@ def test_a_broad_question_on_one_paper_opens_with_passages_spread_over_it(
     from src.rag import lexical_index
 
     index_path = str(workspace_tmp_dir / "index")
-    rel_path = "L6EDW2A4/Uchida - 2015.pdf"
+    rel_path = "ABCD1234/Durand - 2015.pdf"
     filler = " More text about the materials and their properties." * 5
     meta = {"rel_path": rel_path, "source": rel_path, "zotero_title": "High temperature superconductivity"}
     book = [
@@ -2949,7 +2949,7 @@ def test_a_broad_question_on_one_paper_opens_with_passages_spread_over_it(
     ]
 
     docs = rag.query_engine._with_document_overview(
-        "Que dit Uchida 2015 sur la supraconductivité à haute température ?",
+        "Que dit Durand 2015 sur la supraconductivité à haute température ?",
         searched,
         {"sources": [rel_path]},
         6,

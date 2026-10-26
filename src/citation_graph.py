@@ -17,21 +17,18 @@ import os
 import re
 import time
 import unicodedata
-from collections import Counter
 from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
-from src import config
-from src import library as library_module
 from src.article_discovery import (
     _OPENALEX_BASE,
     _canonicalize_doi,
     _get_json_with_retry,
 )
-from src.library import _lookup_zotero, list_library
+from src.library import _lookup_zotero
 from src.notebooks import get_notebook
 
 _logger = logging.getLogger(__name__)
@@ -52,14 +49,9 @@ _MAX_EXPANSION_PER_DIRECTION = 24
 _MAX_EXPANSION_REFERENCE_CANDIDATES = 72
 _OPENALEX_BATCH_CONCURRENCY = 3
 _CROSSREF_BASE = "https://api.crossref.org"
-_INTERNAL_GRAPH_CACHE_TTL_SECONDS = 15 * 60
-_internal_graph_cache: dict[str, Any] = {}
 _RESEARCH_SCOPE_CACHE_TTL_SECONDS = 15 * 60
 _RESEARCH_SCOPE_CACHE_MAX_ENTRIES = 16
 _research_scope_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
-_zotero_autoload_key: str | None = None
-_COMMUNITY_MAX_ARTICLES = 48
-_COMMUNITY_RESOLUTION = 1.25
 
 _SELECT_FULL = (
     "id,display_name,doi,publication_year,authorships,"
@@ -890,6 +882,46 @@ async def build_notebook_citation_graph(nb_id: str) -> dict[str, Any]:
     )
 
 
+async def _resolve_library_paper(
+    client: httpx.AsyncClient | None,
+    rel_path: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve one library paper to a graph record, or explain why it can't be.
+
+    Uses the Zotero DOI when there is one, otherwise looks the title up on
+    OpenAlex. Returns ``(record, None)`` or ``(None, {title, reason})``.
+    """
+    item = _lookup_zotero(rel_path)
+    title, year, author = _paper_lookup_hints(rel_path, item)
+    doi = _canonicalize_doi(str(getattr(item, "doi", "") or ""))
+    preloaded_work: dict[str, Any] | None = None
+    if not doi:
+        if client is not None:
+            preloaded_work = await _fetch_work_by_title(
+                client,
+                title,
+                year=year,
+                author=author,
+            )
+        if not preloaded_work:
+            reason = (
+                "Métadonnées Zotero absentes et titre introuvable sur OpenAlex"
+                if item is None
+                else "Pas de DOI dans Zotero et titre introuvable sur OpenAlex"
+            )
+            return None, {"title": title or rel_path, "reason": reason}
+    return (
+        {
+            "source_id": getattr(item, "item_key", "") or rel_path,
+            "source_title": title,
+            "source_path": rel_path,
+            "doi": doi,
+            "openalex_work": preloaded_work,
+        },
+        None,
+    )
+
+
 async def build_paper_citation_graph(rel_path: str) -> dict[str, Any]:
     """Citation graph for a single library paper, treated as a 1-source graph.
 
@@ -907,46 +939,81 @@ async def build_paper_citation_graph(rel_path: str) -> dict[str, Any]:
             "missing_links": [],
             "stats": {},
         }
-    item = _lookup_zotero(rel)
-    title, year, author = _paper_lookup_hints(rel, item)
-    doi = _canonicalize_doi(str(getattr(item, "doi", "") or ""))
-    preloaded_work: dict[str, Any] | None = None
-    if not doi:
-        headers = {"User-Agent": "Bibliobrain/1.0 (mailto:bibliobrain@local)"}
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, headers=headers) as client:
-            preloaded_work = await _fetch_work_by_title(
-                client,
-                title,
-                year=year,
-                author=author,
-            )
-        if not preloaded_work:
-            reason = (
-                "Métadonnées Zotero absentes et titre introuvable sur OpenAlex"
-                if item is None
-                else "Pas de DOI dans Zotero et titre introuvable sur OpenAlex"
-            )
-            return _empty_payload(
-                [{"title": title or rel, "reason": reason}],
-                started,
-                msg="Cet article n'a pas pu être identifié sur OpenAlex.",
-            )
-    resolved = [
-        {
-            "source_id": getattr(item, "item_key", "") or rel,
-            "source_title": title,
-            "source_path": rel,
-            "doi": doi,
-            "openalex_work": preloaded_work,
-        }
-    ]
+    headers = {"User-Agent": "Bibliobrain/1.0 (mailto:bibliobrain@local)"}
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, headers=headers) as client:
+        record, skip = await _resolve_library_paper(client, rel)
+    if record is None:
+        return _empty_payload(
+            [skip] if skip else [],
+            started,
+            msg="Cet article n'a pas pu être identifié sur OpenAlex.",
+        )
     return await _build_graph_from_resolved(
-        resolved,
+        [record],
         [],
         started,
         total_sources=1,
         empty_msg="Cet article n'a pas pu être identifié sur OpenAlex.",
         enrich_crossref_references=True,
+    )
+
+
+PAPERS_GRAPH_MAX_PATHS = 60
+_PAPERS_GRAPH_LOOKUP_CONCURRENCY = 4
+
+
+async def build_papers_citation_graph(rel_paths: list[str]) -> dict[str, Any]:
+    """Citation graph for a hand-picked set of library papers.
+
+    One paper keeps the single-paper view; several go through the same builder
+    as notebooks, so both screens draw the same graph.
+    """
+    started = time.perf_counter()
+    paths: list[str] = []
+    seen: set[str] = set()
+    for raw in rel_paths or []:
+        rel = str(raw or "").strip()
+        if rel and rel not in seen:
+            seen.add(rel)
+            paths.append(rel)
+    if not paths:
+        return {
+            "ok": False,
+            "msg": "Aucun article choisi.",
+            "nodes": [],
+            "edges": [],
+            "missing_links": [],
+            "stats": {},
+        }
+    if len(paths) > PAPERS_GRAPH_MAX_PATHS:
+        return {
+            "ok": False,
+            "msg": f"Choisissez au plus {PAPERS_GRAPH_MAX_PATHS} articles.",
+            "nodes": [],
+            "edges": [],
+            "missing_links": [],
+            "stats": {},
+        }
+    if len(paths) == 1:
+        return await build_paper_citation_graph(paths[0])
+
+    headers = {"User-Agent": "Bibliobrain/1.0 (mailto:bibliobrain@local)"}
+    semaphore = asyncio.Semaphore(_PAPERS_GRAPH_LOOKUP_CONCURRENCY)
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, headers=headers) as client:
+
+        async def resolve(rel: str):
+            async with semaphore:
+                return await _resolve_library_paper(client, rel)
+
+        results = await asyncio.gather(*(resolve(rel) for rel in paths))
+    resolved = [record for record, _ in results if record is not None]
+    skipped = [skip for record, skip in results if record is None and skip]
+    return await _build_graph_from_resolved(
+        resolved,
+        skipped,
+        started,
+        total_sources=len(paths),
+        empty_msg="Aucun des articles choisis n'a pu être identifié sur OpenAlex.",
     )
 
 
@@ -1424,498 +1491,6 @@ def clear_bibliographic_search_cache() -> int:
     cleared_entries = len(_research_scope_cache)
     _research_scope_cache.clear()
     return cleared_entries
-
-
-def _ensure_zotero_metadata_loaded() -> None:
-    """Lazily restore Zotero metadata after an import-based server startup."""
-    global _zotero_autoload_key
-
-    if library_module._zotero_library:
-        return
-    configured_path = str(config.ZOTERO_DB_PATH or "").strip()
-    if not configured_path or _zotero_autoload_key == configured_path:
-        return
-    _zotero_autoload_key = configured_path
-    library_module.init_zotero(configured_path)
-
-
-def _resolve_indexed_library_sources() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Collect one DOI-backed record per indexed library article."""
-    _ensure_zotero_metadata_loaded()
-    rows, rel_paths = list_library(indexed_only=True)
-    resolved: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for index, rel_path in enumerate(rel_paths):
-        item = _lookup_zotero(rel_path)
-        fallback_title = str(rows[index][0] if index < len(rows) and rows[index] else rel_path)
-        title = str(getattr(item, "title", "") or fallback_title).strip() or rel_path
-        if item is None:
-            skipped.append({"title": title, "path": rel_path, "reason": "Métadonnées Zotero absentes"})
-            continue
-
-        doi = _canonicalize_doi(str(getattr(item, "doi", "") or ""))
-        identity = str(getattr(item, "item_key", "") or doi or rel_path).strip().lower()
-        if identity in seen:
-            continue
-        seen.add(identity)
-        if not doi:
-            skipped.append({"title": title, "path": rel_path, "reason": "Pas de DOI dans Zotero"})
-            continue
-
-        resolved.append(
-            {
-                "source_id": getattr(item, "item_key", "") or rel_path,
-                "source_title": title,
-                "source_path": rel_path,
-                "doi": doi,
-                "author": str(item.first_author() or "").strip(),
-                "year": str(getattr(item, "year", "") or "").strip(),
-            }
-        )
-    return resolved, skipped
-
-
-def _connected_component_metadata(
-    node_ids: set[str],
-    edge_pairs: set[tuple[str, str]],
-) -> tuple[dict[str, int], dict[int, int]]:
-    """Return stable undirected component ids and their sizes.
-
-    Components with at least two papers are numbered by decreasing size.
-    Isolated papers share the special component ``-1`` so that the UI can
-    render them as one neutral collection instead of assigning a rainbow of
-    meaningless one-paper groups.
-    """
-    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
-    for source_id, target_id in edge_pairs:
-        if source_id in adjacency and target_id in adjacency:
-            adjacency[source_id].add(target_id)
-            adjacency[target_id].add(source_id)
-
-    visited: set[str] = set()
-    connected: list[list[str]] = []
-    isolated: list[str] = []
-    for node_id in sorted(node_ids):
-        if node_id in visited:
-            continue
-        stack = [node_id]
-        component: list[str] = []
-        visited.add(node_id)
-        while stack:
-            current = stack.pop()
-            component.append(current)
-            for neighbor in adjacency[current]:
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    stack.append(neighbor)
-        if len(component) == 1:
-            isolated.extend(component)
-        else:
-            connected.append(sorted(component))
-
-    connected.sort(key=lambda component: (-len(component), component[0]))
-    component_by_node: dict[str, int] = {}
-    component_sizes: dict[int, int] = {}
-    for component_id, component in enumerate(connected):
-        component_sizes[component_id] = len(component)
-        for node_id in component:
-            component_by_node[node_id] = component_id
-    if isolated:
-        component_sizes[-1] = len(isolated)
-        for node_id in isolated:
-            component_by_node[node_id] = -1
-    return component_by_node, component_sizes
-
-
-_COMMUNITY_STOPWORDS = {
-    "about", "after", "among", "analysis", "article", "based", "between",
-    "dans", "des", "development", "different", "during", "effects", "etude",
-    "field", "from", "high", "into", "model", "modeling", "modelling",
-    "paper", "properties", "review", "study", "theory", "their", "through",
-    "toward", "towards", "using", "with", "without", "pour", "avec", "une",
-    "dans", "sur", "les", "and", "for", "the", "this", "that", "these",
-}
-
-
-def _community_title_tokens(title: str) -> set[str]:
-    normalized = unicodedata.normalize("NFKD", str(title or "")).encode(
-        "ascii", "ignore"
-    ).decode("ascii").lower()
-    return {
-        token
-        for token in re.findall(r"[a-z][a-z0-9-]{3,}", normalized)
-        if token not in _COMMUNITY_STOPWORDS and not token.isdigit()
-    }
-
-
-def _community_token_key(token: str) -> str:
-    """Collapse obvious singular/plural variants in short community labels."""
-    if token.endswith("ies") and len(token) > 5:
-        return f"{token[:-3]}y"
-    if token.endswith("es") and len(token) > 5:
-        return token[:-2]
-    if token.endswith("s") and len(token) > 4 and not token.endswith("ss"):
-        return token[:-1]
-    return token
-
-
-def _bounded_graph_partitions(
-    graph: Any,
-    max_articles: int = _COMMUNITY_MAX_ARTICLES,
-) -> list[set[str]]:
-    """Detect deterministic Louvain communities and bound oversized results."""
-    import networkx as nx
-
-    partitions: list[set[str]] = []
-    for component_nodes in nx.connected_components(graph):
-        component = graph.subgraph(component_nodes).copy()
-        if len(component) <= 2:
-            partitions.append(set(component.nodes))
-            continue
-        resolution = _COMMUNITY_RESOLUTION
-        detected: list[set[str]] = [set(component.nodes)]
-        for _ in range(4):
-            detected = [
-                set(group)
-                for group in nx.community.louvain_communities(
-                    component,
-                    weight="weight",
-                    resolution=resolution,
-                    seed=42,
-                )
-            ]
-            if max((len(group) for group in detected), default=0) <= max_articles:
-                break
-            resolution *= 1.45
-        for group in detected:
-            if len(group) <= max_articles:
-                partitions.append(group)
-                continue
-            ordered = sorted(
-                group,
-                key=lambda node_id: (-int(graph.degree(node_id)), str(node_id)),
-            )
-            partitions.extend(
-                set(ordered[start : start + max_articles])
-                for start in range(0, len(ordered), max_articles)
-            )
-    return partitions
-
-
-def _build_citation_communities(
-    node_ids: set[str],
-    edge_pairs: set[tuple[str, str]],
-    work_by_id: dict[str, dict[str, Any]],
-    degrees: dict[str, int],
-) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    """Return article communities and their aggregated citation links."""
-    connected_ids = {node_id for edge in edge_pairs for node_id in edge}
-    if not connected_ids:
-        return [], {}, []
-
-    try:
-        import networkx as nx
-
-        graph = nx.Graph()
-        graph.add_nodes_from(connected_ids)
-        for source_id, target_id in edge_pairs:
-            if source_id in connected_ids and target_id in connected_ids:
-                if graph.has_edge(source_id, target_id):
-                    graph[source_id][target_id]["weight"] += 1.0
-                else:
-                    graph.add_edge(source_id, target_id, weight=1.0)
-        partitions = _bounded_graph_partitions(graph)
-    except (ImportError, AttributeError):
-        adjacency: dict[str, set[str]] = {node_id: set() for node_id in connected_ids}
-        for source_id, target_id in edge_pairs:
-            adjacency[source_id].add(target_id)
-            adjacency[target_id].add(source_id)
-        partitions = []
-        remaining = set(connected_ids)
-        while remaining:
-            seed = max(remaining, key=lambda node_id: (degrees.get(node_id, 0), node_id))
-            queue = [seed]
-            group: set[str] = set()
-            remaining.remove(seed)
-            while queue and len(group) < _COMMUNITY_MAX_ARTICLES:
-                current = queue.pop(0)
-                group.add(current)
-                for neighbor in sorted(adjacency[current], key=lambda node_id: (-degrees.get(node_id, 0), node_id)):
-                    if neighbor in remaining and len(group) + len(queue) < _COMMUNITY_MAX_ARTICLES:
-                        remaining.remove(neighbor)
-                        queue.append(neighbor)
-            partitions.append(group)
-
-    partitions = [group for group in partitions if group]
-    partitions.sort(
-        key=lambda group: (
-            -len(group),
-            -max((degrees.get(node_id, 0) for node_id in group), default=0),
-            min(group),
-        )
-    )
-    community_by_node: dict[str, int] = {}
-    for community_id, group in enumerate(partitions):
-        for node_id in group:
-            community_by_node[node_id] = community_id
-
-    title_tokens = {
-        node_id: _community_title_tokens(work_by_id.get(node_id, {}).get("title") or "")
-        for node_id in connected_ids
-    }
-    global_df = Counter(token for tokens in title_tokens.values() for token in tokens)
-    total_documents = max(1, len(connected_ids))
-    internal_edges: Counter[int] = Counter()
-    aggregate_edges: Counter[tuple[int, int]] = Counter()
-    for source_id, target_id in edge_pairs:
-        source_community = community_by_node.get(source_id)
-        target_community = community_by_node.get(target_id)
-        if source_community is None or target_community is None:
-            continue
-        if source_community == target_community:
-            internal_edges[source_community] += 1
-        else:
-            aggregate_edges[(source_community, target_community)] += 1
-
-    communities: list[dict[str, Any]] = []
-    for community_id, group in enumerate(partitions):
-        token_counts = Counter(token for node_id in group for token in title_tokens[node_id])
-        ranked_tokens = sorted(
-            token_counts,
-            key=lambda token: (
-                -(token_counts[token] * math.log((total_documents + 1) / (global_df[token] + 1))),
-                -token_counts[token],
-                token,
-            ),
-        )
-        repeated = [token for token in ranked_tokens if token_counts[token] >= 2]
-        label_tokens: list[str] = []
-        label_token_keys: set[str] = set()
-        for token in repeated or ranked_tokens:
-            token_key = _community_token_key(token)
-            if token_key in label_token_keys:
-                continue
-            label_tokens.append(token)
-            label_token_keys.add(token_key)
-            if len(label_tokens) == 3:
-                break
-        representative_ids = sorted(
-            group,
-            key=lambda node_id: (-degrees.get(node_id, 0), str(work_by_id.get(node_id, {}).get("title") or "")),
-        )[:3]
-        representative_title = str(
-            work_by_id.get(representative_ids[0], {}).get("title") or "Communauté scientifique"
-        ) if representative_ids else "Communauté scientifique"
-        years = [
-            int(work_by_id[node_id]["year"])
-            for node_id in group
-            if str(work_by_id.get(node_id, {}).get("year") or "").isdigit()
-        ]
-        communities.append(
-            {
-                "id": community_id,
-                "label": " · ".join(token.title() for token in label_tokens) or representative_title[:54],
-                "size": len(group),
-                "node_ids": sorted(group),
-                "internal_edges": internal_edges[community_id],
-                "representative_ids": representative_ids,
-                "representative_title": representative_title,
-                "year_min": min(years) if years else None,
-                "year_max": max(years) if years else None,
-            }
-        )
-
-    community_edges = [
-        {
-            "source": source_id,
-            "target": target_id,
-            "count": count,
-        }
-        for (source_id, target_id), count in sorted(aggregate_edges.items())
-    ]
-    return communities, community_by_node, community_edges
-
-
-async def build_library_internal_citation_graph(
-    force_refresh: bool = False,
-) -> dict[str, Any]:
-    """Build the directed citation subgraph induced by the indexed library.
-
-    OpenAlex is used only to resolve the library papers and their outbound
-    references. No cited reference or citing work outside the local library is
-    added to the payload.
-    """
-    started = time.perf_counter()
-    resolved, skipped = _resolve_indexed_library_sources()
-    total_library_articles = len(resolved) + len(skipped)
-    if not resolved:
-        payload = _empty_payload(
-            skipped,
-            started,
-            msg="Aucun article indexé avec un DOI exploitable.",
-        )
-        payload.update(
-            {
-                "engine": "openalex_internal",
-                "graph_type": "library_citations",
-                "warning": payload["msg"],
-            }
-        )
-        return payload
-
-    cache_key = "|".join(sorted(
-        f"{record['doi']}::{record['source_path']}"
-        for record in resolved
-    ))
-    cached_at = float(_internal_graph_cache.get("created_at") or 0)
-    if (
-        not force_refresh
-        and _internal_graph_cache.get("key") == cache_key
-        and time.monotonic() - cached_at < _INTERNAL_GRAPH_CACHE_TTL_SECONDS
-    ):
-        cached_payload = copy.deepcopy(_internal_graph_cache["payload"])
-        cached_payload.setdefault("stats", {})["cached"] = True
-        cached_payload["stats"]["build_ms"] = int((time.perf_counter() - started) * 1000)
-        return cached_payload
-
-    headers = {"User-Agent": "Bibliobrain/1.0 (mailto:bibliobrain@local)"}
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, headers=headers) as client:
-        works = await _fetch_works_by_doi(client, [record["doi"] for record in resolved])
-
-    work_by_doi = {work["doi"]: work for work in works if work.get("doi")}
-    record_by_oa_id: dict[str, dict[str, Any]] = {}
-    work_by_oa_id: dict[str, dict[str, Any]] = {}
-    for record in resolved:
-        work = work_by_doi.get(record["doi"])
-        if not work or not work.get("openalex_id"):
-            skipped.append(
-                {
-                    "title": record["source_title"],
-                    "path": record["source_path"],
-                    "reason": f"DOI {record['doi']} introuvable sur OpenAlex",
-                }
-            )
-            continue
-        oa_id = str(work["openalex_id"])
-        record_by_oa_id[oa_id] = record
-        work_by_oa_id[oa_id] = work
-
-    library_oa_ids = set(record_by_oa_id)
-    edge_pairs: set[tuple[str, str]] = set()
-    for source_id, work in work_by_oa_id.items():
-        for target_id in work.get("referenced_works") or []:
-            if target_id in library_oa_ids and target_id != source_id:
-                edge_pairs.add((source_id, target_id))
-
-    in_degree = {oa_id: 0 for oa_id in library_oa_ids}
-    out_degree = {oa_id: 0 for oa_id in library_oa_ids}
-    edges: list[dict[str, Any]] = []
-    for source_id, target_id in sorted(edge_pairs):
-        out_degree[source_id] += 1
-        in_degree[target_id] += 1
-        edges.append(
-            {
-                "source": source_id,
-                "target": target_id,
-                "kind": "citation",
-                "score": 1.0,
-            }
-        )
-
-    component_by_node, component_sizes = _connected_component_metadata(
-        library_oa_ids,
-        edge_pairs,
-    )
-    degree_by_id = {
-        oa_id: in_degree[oa_id] + out_degree[oa_id]
-        for oa_id in library_oa_ids
-    }
-    communities, community_by_node, community_edges = _build_citation_communities(
-        library_oa_ids,
-        edge_pairs,
-        work_by_oa_id,
-        degree_by_id,
-    )
-    community_size_by_id = {
-        int(community["id"]): int(community["size"])
-        for community in communities
-    }
-
-    nodes: list[dict[str, Any]] = []
-    for oa_id, record in record_by_oa_id.items():
-        work = work_by_oa_id[oa_id]
-        degree = in_degree[oa_id] + out_degree[oa_id]
-        authors = work.get("authors") or []
-        nodes.append(
-            {
-                "id": oa_id,
-                "openalex_id": oa_id,
-                "path": record["source_path"],
-                "title": work.get("title") or record["source_title"],
-                "author": (authors[0] if authors else record.get("author")) or "Auteur inconnu",
-                "authors": authors,
-                "year": work.get("year") or record.get("year") or "n.d.",
-                "doi": work.get("doi") or record["doi"],
-                "journal": work.get("journal") or "",
-                "cited_by_count": int(work.get("cited_by_count") or 0),
-                "degree": degree,
-                "in_degree": in_degree[oa_id],
-                "out_degree": out_degree[oa_id],
-                "size": round(6.0 + min(11.0, degree * 1.35), 2),
-                "component_id": component_by_node.get(oa_id, -1),
-                "component_size": component_sizes.get(component_by_node.get(oa_id, -1), 1),
-                "community_id": community_by_node.get(oa_id, -1),
-                "community_size": community_size_by_id.get(community_by_node.get(oa_id, -1), 1),
-                "group": (
-                    "isolated"
-                    if component_by_node.get(oa_id, -1) == -1
-                    else f"component-{component_by_node[oa_id]}"
-                ),
-            }
-        )
-    nodes.sort(key=lambda node: (-node["degree"], str(node["title"]).lower()))
-
-    warning = ""
-    if nodes and not edges:
-        warning = "Aucune citation directe détectée entre les articles identifiés de la bibliothèque."
-    payload = {
-        "ok": True,
-        "engine": "openalex_internal",
-        "graph_type": "library_citations",
-        "nodes": nodes,
-        "edges": edges,
-        "communities": communities,
-        "community_edges": community_edges,
-        "skipped_sources": skipped,
-        "stats": {
-            "library_articles": total_library_articles,
-            "resolved_articles": len(nodes),
-            "unresolved_articles": len(skipped),
-            "connected_articles": sum(1 for node in nodes if node["degree"] > 0),
-            "isolated_articles": sum(1 for node in nodes if node["degree"] == 0),
-            "connected_components": sum(1 for component_id in component_sizes if component_id >= 0),
-            "largest_component": max(
-                (size for component_id, size in component_sizes.items() if component_id >= 0),
-                default=0,
-            ),
-            "communities_count": len(communities),
-            "largest_community": max((community["size"] for community in communities), default=0),
-            "edges_count": len(edges),
-            "build_ms": int((time.perf_counter() - started) * 1000),
-            "cached": False,
-        },
-        "warning": warning,
-        "msg": "",
-    }
-    _internal_graph_cache.clear()
-    _internal_graph_cache.update(
-        key=cache_key,
-        created_at=time.monotonic(),
-        payload=copy.deepcopy(payload),
-    )
-    return payload
 
 
 def _expansion_work(meta: dict[str, Any], relation: str) -> dict[str, Any]:

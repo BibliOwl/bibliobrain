@@ -863,6 +863,9 @@ class _ChatTurn:
     pipeline_metrics: list[dict] = field(default_factory=list)
     context_passages: list[dict] = field(default_factory=list)
     saw_error_msg: str = ""
+    # An error event arrived after answer text and no text followed it: what
+    # was written is a cut answer, not a complete one.
+    error_cut_answer: bool = False
     started_at: float = field(default_factory=time.perf_counter)
     first_token_at: float | None = None
 
@@ -1261,11 +1264,14 @@ async def _relay_tool_stream(turn: _ChatTurn, gen):
         if kind == "token":
             token_piece = chunk.get("text", "") or ""
             turn.add_answer_text(token_piece)
+            if token_piece:
+                turn.error_cut_answer = False
             yield sse({"type": "token", "text": token_piece})
             continue
         if kind == "answer_replace":
             replacement = str(chunk.get("text") or "")
             turn.replace_answer_text(replacement)
+            turn.error_cut_answer = False
             yield sse({"type": "answer_replace", "text": replacement})
             continue
         if kind == "context_passages":
@@ -1282,11 +1288,21 @@ async def _relay_tool_stream(turn: _ChatTurn, gen):
             turn.export_file_meta = dict(data) if isinstance(data, dict) else None
         elif kind == "error":
             turn.saw_error_msg = chunk.get("msg", "") or "Erreur inconnue"
+            turn.error_cut_answer = bool(turn.full_answer.strip())
         yield sse(chunk)
 
 
 def _save_assistant_answer(turn: _ChatTurn) -> None:
     req = turn.req
+    if turn.abort_signal is not None and turn.abort_signal.is_aborted():
+        # Stop, a context switch or a page exit ends the tool stream with an
+        # "aborted" error event, not with InterruptedError: keep the partial
+        # answer marked as interrupted, as a client disconnect does.
+        _save_interrupted_answer(turn, stream_abort_reason(turn.abort_signal))
+        return
+    if turn.error_cut_answer:
+        _save_cut_answer(turn, turn.saw_error_msg)
+        return
     if turn.full_answer.strip():
         tool_plan = turn.tool_plan
         assert tool_plan is not None
@@ -1389,6 +1405,28 @@ def _save_interrupted_answer(turn: _ChatTurn, reason: str) -> None:
     )
 
 
+def _save_cut_answer(turn: _ChatTurn, error_message: str) -> None:
+    """Keep the text of an answer an error cut, marked as incomplete."""
+    add_chat_message(
+        turn.chat_id,
+        "assistant",
+        f"{turn.full_answer}\n\n{_INCOMPLETE_ANSWER_TEXT}",
+        model=turn.req.model,
+        meta={
+            "sources": turn.final_sources,
+            "debug_metrics": turn.debug_metrics(),
+            "mode": turn.chat_mode,
+            "answer_origin": turn.answer_origin,
+            "incomplete": True,
+            "incomplete_reason": str(error_message or "")[:300],
+            **turn.discovery_session_entry(),
+        },
+    )
+
+
+_INCOMPLETE_ANSWER_TEXT = "[Réponse incomplète : la génération s'est arrêtée sur une erreur]"
+
+
 def _save_failed_answer(turn: _ChatTurn, error_code: str) -> None:
     if not turn.full_answer.strip():
         add_chat_message(
@@ -1399,18 +1437,7 @@ def _save_failed_answer(turn: _ChatTurn, error_code: str) -> None:
             meta={"error": True, "mode": turn.chat_mode},
         )
         return
-    add_chat_message(
-        turn.chat_id,
-        "assistant",
-        turn.full_answer,
-        model=turn.req.model,
-        meta={
-            "sources": turn.final_sources,
-            "debug_metrics": turn.debug_metrics(),
-            "mode": turn.chat_mode,
-            **turn.discovery_session_entry(),
-        },
-    )
+    _save_cut_answer(turn, error_code)
 
 
 async def _chat_turn_events(turn: _ChatTurn, request_id: str, *, external_api_allowed: bool):
@@ -1601,6 +1628,17 @@ async def api_literature_review(req: LiteratureReviewRequest):
                     saw_error_msg = chunk.get("msg", "") or "Erreur inconnue"
                 yield sse(chunk)
 
+            if abort_signal.is_aborted():
+                # The review stops by returning early, at any step: without
+                # this, a stop during the synthesis left no answer at all.
+                _save_interrupted_review(
+                    chat_id,
+                    full_answer,
+                    final_sources,
+                    req.model,
+                    stream_abort_reason(abort_signal),
+                )
+                return
             if full_answer.strip():
                 add_chat_message(
                     chat_id,

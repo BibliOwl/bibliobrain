@@ -93,6 +93,9 @@ SECRET_ENVIRONMENT_NAMES = frozenset(
 INTERNAL_ENVIRONMENT_NAMES = frozenset(
     {
         "BIBLIOBRAIN_DOCUMENT_ISOLATION",
+        # Test-only: preview the update page of another installation type
+        # (git, zip or packaged) for one process.
+        "BIBLIOBRAIN_INSTALL_MODE",
         "BIBLIOBRAIN_MANAGED_SERVER",
         "BIBLIOBRAIN_MAX_DOCUMENT_MB",
         "BIBLIOBRAIN_PARSER_MEMORY_MB",

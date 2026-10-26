@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -329,11 +331,11 @@ def test_load_zotero_library_reads_a_copy_when_zotero_is_writing(
     real_open = zotero_db._open_db
     opened: list[str] = []
 
-    def flaky_open(path: str) -> sqlite3.Connection:
+    def flaky_open(path: str, **kwargs: Any) -> sqlite3.Connection:
         opened.append(path)
         if len(opened) == 1:
             raise sqlite3.DatabaseError("database disk image is malformed")
-        return real_open(path)
+        return real_open(path, **kwargs)
 
     monkeypatch.setattr(zotero_db, "_open_db", flaky_open)
     monkeypatch.setattr(zotero_db, "_ZOTERO_RETRY_DELAY_SECONDS", 0)
@@ -344,3 +346,30 @@ def test_load_zotero_library_reads_a_copy_when_zotero_is_writing(
     assert len(opened) == 2 and opened[1] != str(db_path)
     attached = lookup_zotero_item("ATTACH1/active.pdf", library)
     assert attached is not None and attached.item_key == "PARENT1"
+
+
+def test_load_zotero_library_sees_changes_still_in_the_wal(workspace_tmp_dir: Path) -> None:
+    # An immutable read ignores the WAL: a title Zotero committed there stayed
+    # invisible until the next checkpoint.
+    db_path = workspace_tmp_dir / "zotero.sqlite"
+    _create_minimal_zotero_sqlite(db_path)
+    writer = sqlite3.connect(db_path)
+    try:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("UPDATE itemDataValues SET value = 'Renamed paper' WHERE valueID = 1")
+        writer.commit()
+        assert (workspace_tmp_dir / "zotero.sqlite-wal").stat().st_size > 32
+        before = set(os.listdir(tempfile.gettempdir()))
+        load_zotero_library.cache_clear()
+
+        library = load_zotero_library(str(db_path))
+
+        attached = lookup_zotero_item("ATTACH1/active.pdf", library)
+        assert attached is not None and attached.title == "Renamed paper"
+        # The private copy read for it is gone.
+        leftovers = set(os.listdir(tempfile.gettempdir())) - before
+        assert not [name for name in leftovers if name.startswith("bibliobrain-zotero-")]
+    finally:
+        writer.close()
+        load_zotero_library.cache_clear()

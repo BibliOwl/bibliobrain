@@ -89,9 +89,15 @@ envoyé tant que vous n'avez pas dit oui, et rien n'est installé sans votre cli
 
 - Quand une version est disponible, le bouton **Mise à jour disponible** apparaît dans la
   barre latérale. Il ouvre **Paramètres > Réglages experts > Diagnostic**, section
-  **Version et mises à jour**, où **Mettre à jour vers…** télécharge, vérifie, sauvegarde
-  vos données, installe puis redémarre Bibliobrain. Cela marche quand Bibliobrain a été
-  lancé depuis son raccourci.
+  **Version et mises à jour**. Ce qui s'y trouve dépend de la façon dont Bibliobrain a été
+  installé :
+  - **avec l'installateur ou le ZIP** : la nouvelle version est téléchargée et vérifiée
+    d'avance ; **Installer la version…** sauvegarde vos données, installe puis redémarre
+    Bibliobrain. Cela marche quand Bibliobrain a été lancé depuis son raccourci. Avec le
+    ZIP, les étapes pour le faire à la main restent affichées en secours ;
+  - **avec Git** : **Mettre à jour (git pull)** récupère les nouveaux commits de la branche
+    suivie, puis redémarre Bibliobrain. Le bouton est bloqué tant que des fichiers suivis
+    sont modifiés : validez-les (`git commit`) ou mettez-les de côté (`git stash`) avant.
 - Dans cette même section : la case **Vérifier les mises à jour chaque jour** et le bouton
   **Vérifier maintenant**.
 - Sans passer par l'application : lancez `Update-Bibliobrain.cmd` (une sauvegarde est

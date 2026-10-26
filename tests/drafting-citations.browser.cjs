@@ -81,7 +81,7 @@ async function main() {
       window.showToast = () => {};
       window.copyTextWithFallback = async text => { window.copiedText = text; return true; };
     }, englishLabels());
-    for (const file of ['static/js/app.js', 'static/js/event-bindings.js', 'static/js/app/drafting.js']) {
+    for (const file of ['static/js/boot.js', 'static/js/app.js', 'static/js/event-bindings.js', 'static/js/app/drafting.js']) {
       await page.addScriptTag({ path: path.join(root, file) });
     }
     const results = await page.evaluate(async () => {

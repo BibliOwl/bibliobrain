@@ -24,7 +24,7 @@ def _paper(author: str, year: str, path: str, title: str = _TITLE) -> SimpleName
 
 
 def test_names_and_years_are_found_with_or_without_parentheses() -> None:
-    assert named_studies("Que dit Uchida 2015 sur la supraconductivité ?") == [("uchida", "2015")]
+    assert named_studies("Que dit Durand 2015 sur la supraconductivité ?") == [("durand", "2015")]
     assert named_studies("Compare Kim et al. (2019) et Bean, 1962") == [
         ("kim", "2019"),
         ("bean", "1962"),
@@ -33,18 +33,18 @@ def test_names_and_years_are_found_with_or_without_parentheses() -> None:
 
 def test_a_named_study_resolves_to_its_library_paper() -> None:
     papers = [
-        _paper("Uchida, Shin-ichi", "2015", "L6EDW2A4/Uchida - 2015.pdf"),
-        _paper("Uchida, Shin-ichi", "2011", "AAAA/Uchida - 2011.pdf", title="Other"),
+        _paper("Durand, Claire", "2015", "ABCD1234/Durand - 2015.pdf"),
+        _paper("Durand, Claire", "2011", "AAAA/Durand - 2011.pdf", title="Other"),
         _paper("Larbalestier, David", "2015", "BBBB/Larbalestier - 2015.pdf", title="Other"),
     ]
-    records = resolve_study_sources("Que dit Uchida 2015 sur la supraconductivité ?", papers)
-    assert [record["rel_path"] for record in records] == ["L6EDW2A4/Uchida - 2015.pdf"]
+    records = resolve_study_sources("Que dit Durand 2015 sur la supraconductivité ?", papers)
+    assert [record["rel_path"] for record in records] == ["ABCD1234/Durand - 2015.pdf"]
 
 
 def test_a_name_that_is_not_a_library_first_author_is_left_to_the_search() -> None:
     papers = [_paper("Larbalestier, David", "2015", "BBBB/Larbalestier - 2015.pdf")]
     assert resolve_study_sources("Le modèle de Bean 1962 ?", papers) == []
-    assert resolve_study_sources("Que dit Uchida 2015 ?", papers) == []
+    assert resolve_study_sources("Que dit Durand 2015 ?", papers) == []
 
 
 def test_too_many_papers_for_one_name_and_year_is_not_a_reference() -> None:
@@ -56,15 +56,15 @@ def test_too_many_papers_for_one_name_and_year_is_not_a_reference() -> None:
 
 
 def test_a_question_on_the_paper_subject_is_mostly_an_overview() -> None:
-    studies = [("uchida", "2015")]
-    question = "Que dit Uchida 2015 sur la supraconductivité à haute température ?"
+    studies = [("durand", "2015")]
+    question = "Que dit Durand 2015 sur la supraconductivité à haute température ?"
     assert overview_share(question, _TITLE, studies=studies) == 2 / 3
-    assert overview_share("Résume Uchida 2015", _TITLE, studies=studies) == 2 / 3
+    assert overview_share("Résume Durand 2015", _TITLE, studies=studies) == 2 / 3
 
 
 def test_a_question_on_one_point_keeps_most_passages_from_the_search() -> None:
-    studies = [("uchida", "2015")]
-    assert overview_share("Que dit Uchida 2015 sur le dopage ?", _TITLE, studies=studies) == 1 / 3
+    studies = [("durand", "2015")]
+    assert overview_share("Que dit Durand 2015 sur le dopage ?", _TITLE, studies=studies) == 1 / 3
     assert overview_share("Quelle est la Tc de LaFeAsO ?", _TITLE) == 0.0
 
 

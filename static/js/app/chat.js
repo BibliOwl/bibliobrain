@@ -572,7 +572,7 @@ function revealCitationSource(label, root = null) {
     ).find((node) => String(node.dataset.sourceLabel || '').trim().toUpperCase() === normalizedLabel);
     if (inlineCard) {
       flashSourceCard(inlineCard);
-      inlineCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      inlineCard.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
       return;
     }
   }
@@ -583,7 +583,7 @@ function revealCitationSource(label, root = null) {
     ).find((node) => String(node.dataset.sourceLabel || '').trim().toUpperCase() === normalizedLabel);
     if (notebookCard) {
       flashSourceCard(notebookCard);
-      notebookCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      notebookCard.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'nearest' });
       return;
     }
   }
@@ -591,16 +591,17 @@ function revealCitationSource(label, root = null) {
 }
 
 function sourcePageLabel(source) {
-  const page = String(source?.page || '').trim();
+  const page = String(source?.page ?? '').trim();
   // format_sources_api sends "?" when the chunk has no page.
   if (!page || page === '?') return '';
   const locationLabel = String(source?.location_label || '').trim();
   if (locationLabel) return locationLabel;
   const contentType = String(source?.content_type || '').trim();
+  const pdfPage = sourcePageNumber(source);
   return contentType === 'presentation_slide' ? `diapo ${page}`
     : contentType === 'ebook_chapter' ? `chap. ${page}`
       : contentType === 'document_section' ? `section ${page}`
-        : `p.${page}`;
+        : pdfPage ? `p.${pdfPage}` : `p.${page}`;
 }
 
 function createSourceCard(source, options = {}) {
@@ -715,13 +716,20 @@ function createSourceAnchorBox(source) {
   return anchorBox;
 }
 
+// The index stores a PDF page as pypdf numbers it, from 0, and its label
+// ("Page 126") from 1. The PDF viewer counts from 1 like the label.
 function sourcePageNumber(source) {
-  const page = parseInt(String(source?.page || '').trim(), 10);
   const contentType = String(source?.content_type || '').trim();
-  if (!Number.isFinite(page) || page < 1) return 0;
   // Slides, chapters and sections are numbered in their own units, not PDF pages.
   if (['presentation_slide', 'ebook_chapter', 'document_section'].includes(contentType)) return 0;
-  return page;
+  const labelled = String(source?.location_label || '').trim().match(/^page\s+(\d+)$/i);
+  if (labelled) {
+    const page = parseInt(labelled[1], 10);
+    return page >= 1 ? page : 0;
+  }
+  const raw = String(source?.page ?? '').trim();
+  if (!/^\d+$/.test(raw)) return 0;
+  return parseInt(raw, 10) + 1;
 }
 
 function sourceOpenDocumentUrl(source, path = sourceActionPath(source)) {
@@ -1144,7 +1152,7 @@ function goToSource(displayFile) {
       return;
     }
     if (row) {
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'center' });
       document.querySelectorAll('#lib-tbody tr').forEach(tr => tr.classList.remove('selected', 'highlight-flash'));
       row.classList.add('selected', 'highlight-flash');
     }
@@ -1176,8 +1184,12 @@ function _setSendButtonIdle() {
   if (!btn) return;
   btn.classList.remove('is-stop');
   btn.innerHTML = _chatSendIconHtml();
+  // The i18n observer rewrites title and aria-label from these keys after any
+  // change, so they must name the button's current role.
+  btn.setAttribute('data-i18n-title', 'chat.sendTitle');
+  btn.setAttribute('data-i18n-aria-label', 'chat.sendAria');
   btn.title = _tr('Envoyer');
-  btn.setAttribute('aria-label', 'Envoyer le message');
+  btn.setAttribute('aria-label', _tr('Envoyer le message'));
 }
 
 function _setSendButtonStop() {
@@ -1185,8 +1197,10 @@ function _setSendButtonStop() {
   if (!btn) return;
   btn.classList.add('is-stop');
   btn.innerHTML = _chatStopIconHtml();
+  btn.setAttribute('data-i18n-title', 'chat.stopTitle');
+  btn.setAttribute('data-i18n-aria-label', 'chat.stopAria');
   btn.title = _tr('Arrêter');
-  btn.setAttribute('aria-label', 'Arrêter la génération');
+  btn.setAttribute('aria-label', _tr('Arrêter la génération'));
 }
 
 function handleClickableCardKey(event, action) {
@@ -2475,11 +2489,11 @@ async function sendMessage(options = {}) {
   const shouldPollRuntime = isLocalOllamaProvider();
 
   const scheduleScroll = () => {
-    if (scrollQueued) return;
+    if (scrollQueued || !isVisualUpdateVisible(msgs)) return;
     scrollQueued = true;
     window.requestAnimationFrame(() => {
       scrollQueued = false;
-      msgs.scrollTop = msgs.scrollHeight;
+      if (isVisualUpdateVisible(msgs)) msgs.scrollTop = msgs.scrollHeight;
     });
   };
 

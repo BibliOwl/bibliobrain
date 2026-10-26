@@ -5,17 +5,26 @@ Français · [English](Maps-en.md)
 L'onglet **Cartographies** vous aide à vous repérer dans votre corpus et à comprendre
 d'où viennent les réponses du chat. Quatre vues se choisissent en haut de l'onglet.
 
-<!-- TODO capture : vue « Qui cite qui » -->
+<!-- TODO capture : vue « Depuis des articles » -->
 
-## Qui cite qui
+## Depuis des articles
 
-Les citations qui relient les articles de votre bibliothèque, regroupées en communautés.
-Un clic sur un article isole ses citations directes ; un double-clic l'ouvre dans la
-Bibliothèque. Cette vue a besoin de la recherche en ligne (OpenAlex, voir plus bas).
+Choisissez un ou plusieurs articles de la bibliothèque, puis **Construire le graphe** : vous
+obtenez leur graphe de citations (voir plus bas) directement dans l'onglet.
 
-## Thèmes
+- **Ajouter un article** cherche dans la bibliothèque par titre, auteur ou année ;
+  **Entrée** ajoute le premier résultat.
+- Trois boutons ajoutent d'un coup la **Sélection de la bibliothèque**, les **Sources de la
+  dernière réponse** du chat ou les **Articles d'un carnet**.
+- Jusqu'à 60 articles. **Changer les articles** revient au choix sans le perdre.
+- Dans la Bibliothèque, sélectionnez des articles puis **Graphe de citations** dans la
+  barre de sélection : l'onglet s'ouvre et le graphe se construit aussitôt.
 
-Une carte de vos articles par thèmes, pour naviguer dans un gros corpus.
+Cette vue a besoin de la recherche en ligne (OpenAlex, voir plus bas).
+
+## Vue d'ensemble
+
+Une carte de toute votre bibliothèque par thèmes, pour naviguer dans un gros corpus.
 
 - **Rechercher un concept** filtre la carte.
 - **Réinitialiser** revient à la vue d'ensemble.
@@ -39,14 +48,14 @@ citations de ses publications.
 
 ## Graphes de citations
 
-Ils s'ouvrent pour un article (Bibliothèque, **Graphe de citations**), pour un carnet, ou
-pour un auteur ou un laboratoire. Ils utilisent OpenAlex : la recherche en ligne doit être
+Ils s'ouvrent pour un article (Bibliothèque, **Graphe de citations**), pour un carnet, pour
+des articles choisis (vue **Depuis des articles**), ou pour un auteur ou un laboratoire. Ils utilisent OpenAlex : la recherche en ligne doit être
 autorisée. Le temps se lit de gauche à droite :
 
 - **Un article** : à gauche ce qu'il cite (**← Ce qu'il cite**), au centre l'article, à
   droite les travaux qui le citent (**Qui le cite →**). La position donne l'année, la
   taille d'un point le nombre total de citations.
-- **Plusieurs articles** (carnet, auteur) : trois bandes, les références citées, les
+- **Plusieurs articles** (articles choisis, carnet, auteur) : trois bandes, les références citées, les
   articles du corpus et les travaux citants, sur un même axe des années. La taille d'un
   point donne le nombre de liens dans ce graphe.
 - Les filtres en haut masquent les références, les citants ou les liens internes ; le

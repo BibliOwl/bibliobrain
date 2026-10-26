@@ -4090,7 +4090,7 @@ def _has_query_content(message: str) -> bool:
 
 
 def _named_study_sources(message: str) -> list[str]:
-    """The library papers a question names as "Uchida 2015", as source filters.
+    """The library papers a question names as "Durand 2015", as source filters.
 
     Without it the name and year were only words of the search, and a
     question about a book got passages from anywhere in the library.

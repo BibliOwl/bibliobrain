@@ -58,7 +58,7 @@ def test_light_mode_disables_expensive_visual_effects() -> None:
     selector = 'html[data-performance-mode="light"] *'
     assert selector in APP_CSS
     assert "backdrop-filter: none !important" in APP_CSS
-    assert "animation-iteration-count: 1 !important" in APP_CSS
+    assert "animation: none !important" in APP_CSS
     assert 'html[data-performance-mode="light"] .spinner' in APP_CSS
 
 

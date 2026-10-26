@@ -161,6 +161,10 @@ function streamRenderIntervalMs() {
   return isLightPerformanceMode() ? 140 : 50;
 }
 
+function isVisualUpdateVisible(element) {
+  return !document.hidden && Boolean(element?.isConnected && element.getClientRects().length);
+}
+
 // ---------------------------------------------
 //  I18N HELPER
 // ---------------------------------------------

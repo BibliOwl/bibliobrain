@@ -50,8 +50,8 @@ The left sidebar opens six areas:
   (summary, methods, conclusions…) and copy references in APA or BibTeX format.
 - **Discovery**: search online for papers through Semantic Scholar, OpenAlex, arXiv,
   HAL and Crossref, and explore publication trends when you request it.
-- **Maps**: explore citations within your library, a topic map and the sources
-  behind the latest chat answer.
+- **Maps**: the citation graph of papers you pick, a topic overview of your
+  library and the sources behind the latest chat answer.
 - **Notebooks**: create thematic subsets with their own notes and chat.
 - **Writing**: use an editor that suggests sources supporting your text, sentence
   by sentence.

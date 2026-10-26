@@ -97,7 +97,7 @@ function openSettingsAt(tabName, focusId = '') {
   if (!focusId) return;
   window.setTimeout(() => {
     const target = document.getElementById(focusId);
-    target?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    target?.scrollIntoView?.({ block: 'center', behavior: preferredScrollBehavior() });
     target?.focus();
   }, 80);
 }
@@ -110,7 +110,7 @@ function openExternalApiSettings() {
   switchSettingsTab('online');
   window.setTimeout(() => {
     const target = document.getElementById('allow-external-discovery');
-    target?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    target?.scrollIntoView?.({ block: 'center', behavior: preferredScrollBehavior() });
     target?.focus();
   }, 80);
 }

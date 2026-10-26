@@ -41,7 +41,7 @@ const _nbCg = {
   requestOptions: {},
   abortController: null,
   returnFocusEl: null,
-  embedded: false,
+  embedded: '',
   suspended: false,
   scope: { kind: 'notebook', title: '' },
   notebookId: '',
@@ -53,6 +53,16 @@ document.addEventListener('visibilitychange', () => {
     return;
   }
   if (_nbCgIsOpen() && _nbCg.layout) _nbCgStartLoop();
+});
+
+window.addEventListener('bibliobrain:performancechange', () => {
+  if (!_nbCg.layout) return;
+  _nbCg.drag = null;
+  _nbCgSyncPositions();
+  if (_nbCgIsOpen()) {
+    _nbCgUpdatePositionsDom();
+    document.getElementById('nb-cg-stage')?.classList.toggle('is-draggable', _nbCgMotionEnabled());
+  }
 });
 
 function _nbCgIsOpen() {
@@ -390,16 +400,43 @@ function _nbCgEscapeKeyHandler(event) {
   }
 }
 
+// Screens of the Cartographies tab that can hold the graph inline. Each one
+// hides its own form while the graph is shown and gets it back on close.
+const _NB_CG_EMBED_HOSTS = {
+  research: {
+    workspace: 'cartography-citation-workspace',
+    builder: 'research-scope-builder',
+    focus: 'research-scope-query',
+    backLabel: 'researchScope.changeIdentity',
+  },
+  articles: {
+    workspace: 'article-graph-citation-workspace',
+    builder: 'article-graph-builder',
+    focus: 'article-graph-search',
+    backLabel: 'articleGraph.changeSelection',
+  },
+};
+
+function _nbCgReleaseHost(hostName) {
+  const host = _NB_CG_EMBED_HOSTS[hostName];
+  if (!host) return;
+  document.getElementById(host.workspace)?.setAttribute('hidden', '');
+  document.getElementById(host.builder)?.removeAttribute('hidden');
+}
+
 function _nbCgMount(embedded = false) {
   const modal = document.getElementById('nb-citation-graph-modal');
   const overlay = document.getElementById('nb-citation-graph-overlay');
-  const workspace = document.getElementById('cartography-citation-workspace');
+  const hostName = embedded === true ? 'research' : String(embedded || '');
+  const host = _NB_CG_EMBED_HOSTS[hostName] || null;
+  const workspace = host ? document.getElementById(host.workspace) : null;
   if (!modal) return;
-  _nbCg.embedded = Boolean(embedded && workspace);
-  modal.classList.toggle('is-embedded', _nbCg.embedded);
+  if (_nbCg.embedded && _nbCg.embedded !== hostName) _nbCgReleaseHost(_nbCg.embedded);
+  _nbCg.embedded = workspace ? hostName : '';
+  modal.classList.toggle('is-embedded', Boolean(_nbCg.embedded));
   if (_nbCg.embedded) {
     workspace.hidden = false;
-    document.getElementById('research-scope-builder')?.setAttribute('hidden', '');
+    document.getElementById(host.builder)?.setAttribute('hidden', '');
     workspace.appendChild(modal);
     modal.setAttribute('role', 'region');
     modal.removeAttribute('aria-modal');
@@ -411,8 +448,8 @@ function _nbCgMount(embedded = false) {
   }
   const closeButton = document.getElementById('nb-cg-close');
   if (closeButton) {
-    closeButton.textContent = _nbCg.embedded ? `← ${_ti('researchScope.changeIdentity')}` : '×';
-    closeButton.setAttribute('aria-label', _nbCg.embedded ? _ti('researchScope.changeIdentity') : _ti('researchScope.close'));
+    closeButton.textContent = _nbCg.embedded ? `← ${_ti(host.backLabel)}` : '×';
+    closeButton.setAttribute('aria-label', _nbCg.embedded ? _ti(host.backLabel) : _ti('researchScope.close'));
   }
 }
 
@@ -517,10 +554,10 @@ function closeNbCitationGraph() {
   const returnFocus = _nbCg.returnFocusEl;
   _nbCg.returnFocusEl = null;
   if (wasEmbedded) {
-    document.getElementById('cartography-citation-workspace')?.setAttribute('hidden', '');
-    document.getElementById('research-scope-builder')?.removeAttribute('hidden');
-    _nbCg.embedded = false;
-    window.setTimeout(() => document.getElementById('research-scope-query')?.focus(), 0);
+    _nbCgReleaseHost(wasEmbedded);
+    _nbCg.embedded = '';
+    const focusId = _NB_CG_EMBED_HOSTS[wasEmbedded]?.focus;
+    window.setTimeout(() => (focusId ? document.getElementById(focusId) : null)?.focus(), 0);
     return;
   }
   if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus();
@@ -1069,10 +1106,10 @@ const _NB_CG_MAX_SETTLE_FRAMES = 420;
 
 function _nbCgStartLoop() {
   _nbCg.loopFrames = 0;
-  if (_nbCg.rafId || document.hidden) return;
+  if (_nbCg.rafId || document.hidden || !_nbCgMotionEnabled()) return;
   const tick = () => {
     _nbCg.rafId = null;
-    if (!_nbCgIsOpen() || document.hidden || !_nbCg.layout) return;
+    if (!_nbCgIsOpen() || document.hidden || !_nbCg.layout || !_nbCgMotionEnabled()) return;
     const moving = _nbCgStep();
     _nbCgUpdatePositionsDom();
     _nbCg.loopFrames += 1;
@@ -1480,6 +1517,7 @@ function _nbCgRenderHeader() {
     const eyebrowKeys = {
       notebook: 'citationGraph.eyebrowNotebook',
       article: 'citationGraph.eyebrowArticle',
+      selection: 'citationGraph.eyebrowSelection',
       author: 'citationGraph.eyebrowAuthor',
       institution: 'citationGraph.eyebrowInstitution',
     };

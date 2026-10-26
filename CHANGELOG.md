@@ -18,12 +18,59 @@ It is read by `src/version.py`, `packaging/build-installer.ps1` and
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-26
+
+### Added
+
+- Cartographies: a new "From papers" view, open by default. Pick one or more library
+  papers (by searching the library, or in one go from the library selection, the sources
+  of the last answer or a notebook, up to 60), and the citation graph used by the paper
+  sheet and notebooks is drawn in the screen.
+- Library: a "Citation graph" button in the selection bar builds that graph for the
+  selected papers.
+
+### Changed
+
+- Cartographies: the "Themes" view is now called "Overview".
+- Light performance profile: animations, transitions, shadows and blur are switched off
+  entirely, and a streamed answer only re-renders the paragraph being written, so
+  finished paragraphs (and any text selected in them) stay in place.
+- Updates now follow the way Bibliobrain was installed. With the installer or the ZIP
+  package, the new release is downloaded and verified in the background once daily checks
+  are on, so the click only installs it. ZIP installs also get the manual steps as a
+  fallback: a button to download the new ZIP and one to open the folder holding
+  `Update-Bibliobrain.cmd`. With a Git clone, an "Update (git pull)" button is always
+  offered; it is refused while tracked files have local changes, and
+  `Update-Bibliobrain.cmd` refuses too.
+
+### Removed
+
+- Cartographies: the "Who cites whom" view (citations between library papers) and its
+  `/api/library/internal-citation-graph` route.
+
+### Fixed
+
+- Chat: an answer cut short is no longer saved as a complete one. A stream from LM Studio
+  or a remote provider that closed without its final chunk, an error after some text, and
+  Stop, a context switch or leaving the page during an answer now save the text with an
+  "incomplete" or "interrupted" notice.
+- Literature review: Stop during the synthesis left the conversation with only the
+  question while the model kept generating. The synthesis now stops and the review is
+  saved with an "interrupted" notice.
+- Chat: a citation labelled "Page 126" opened the PDF at page 125. It now opens at the
+  page its card shows, older indexes included.
+- Zotero: a change made in Zotero (an edited title, for example) stayed invisible until
+  Zotero wrote it to its main database file. Changes still held in its journal are now
+  read.
+- Accessibility: while an answer is generated, screen readers announce the chat button as
+  "Stop generation" (tooltip "Stop") instead of "Send message".
+
 ## [0.8.4] - 2026-10-25
 
 ### Fixed
 
-- Chat: "Que dit Uchida 2015 sur…" ("What does Uchida 2015 say about…") was not recognised
-  as a question about a library document (only "Uchida (2015)" was). The name and year are
+- Chat: "Que dit Durand 2015 sur…" ("What does Durand 2015 say about…") was not recognised
+  as a question about a library document (only "Durand (2015)" was). The name and year are
   now looked up in the library and the search is limited to that document. A broad question
   about one document ("what does it say", "summarise"…) gets its introduction, chapter
   openings and conclusion instead of neighbouring passages.
@@ -439,7 +486,8 @@ First public release.
   horizontal strip: it is a vertical list again. History collapsed around 1100 px: its two
   buttons no longer overflow the bar.
 
-[Unreleased]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/bibliOwl/bibliobrain/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.1...v0.8.2

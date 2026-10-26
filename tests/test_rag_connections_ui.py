@@ -11,17 +11,18 @@ GRAPH_JS = (ROOT / "static" / "js" / "knowledge-graph.js").read_text(encoding="u
 GRAPH_CSS = (ROOT / "static" / "css" / "knowledge-graph.css").read_text(encoding="utf-8")
 
 
-def test_cartography_ui_defaults_to_citations_and_keeps_secondary_views() -> None:
+def test_cartography_ui_defaults_to_article_graph_and_keeps_secondary_views() -> None:
     assert 'id="kg-view-mode"' in HTML
-    assert '<option value="citations" selected' in HTML
-    assert 'data-cartography-view="citations"' in HTML
+    assert '<option value="articles" selected' in HTML
+    assert 'data-cartography-view="articles"' in HTML
     assert 'data-cartography-view="research"' in HTML
     assert 'data-cartography-view="retrieval"' in HTML
     assert 'data-cartography-view="library"' in HTML
+    # "Qui cite qui" (citations between library papers) is gone.
+    assert 'data-cartography-view="citations"' not in HTML
+    assert "/api/library/internal-citation-graph" not in GRAPH_JS
     assert 'id="kg-engine-skip-wiki"' not in HTML
     assert 'data-i18n="nav.connections">Cartographies</span>' in HTML
-    assert "/api/library/internal-citation-graph" in GRAPH_JS
-    assert "graph_type === 'library_citations'" in GRAPH_JS
     assert "citation-has-focus" in GRAPH_JS
     assert "classList.contains('citation-network')" in GRAPH_JS
     assert "svg.style.width = '100%'" in GRAPH_JS

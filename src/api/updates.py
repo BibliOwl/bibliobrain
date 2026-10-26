@@ -39,3 +39,10 @@ def api_update_start(request: Request):
     _require_local(request)
     result = update_check.start_update(is_busy=_index_or_operation_busy)
     return {**result, "status": update_check.get_status()}
+
+
+@router.post("/api/update/open-folder")
+def api_update_open_folder(request: Request):
+    """ZIP installs: open the folder that holds Update-Bibliobrain.cmd."""
+    _require_local(request)
+    return {"ok": update_check.open_install_folder()}

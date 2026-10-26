@@ -113,7 +113,7 @@ async function main() {
       window.persistStartupOnboardingDone = async () => { window.onboardingDone = true; };
       window._rememberStartupGuideDone = () => { window.guideRemembered = true; };
     });
-    for (const script of ['event-bindings.js', 'i18n.js', 'app/settings-panel.js', 'settings.js', 'static-event-bindings.js']) {
+    for (const script of ['boot.js', 'event-bindings.js', 'i18n.js', 'app/settings-panel.js', 'settings.js', 'static-event-bindings.js']) {
       await page.addScriptTag({ url: `/static/js/${script}` });
     }
     await page.evaluate(() => {

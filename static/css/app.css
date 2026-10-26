@@ -7544,6 +7544,153 @@ body.nb-article-viewer-open { overflow: hidden; }
   #nb-citation-graph-modal.is-embedded { inset: auto; border: 1px solid var(--border); border-radius: 12px; }
 }
 
+/* Cartographies › graph built from chosen library papers */
+#article-graph-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#article-graph-workspace[hidden],
+#article-graph-builder[hidden],
+#article-graph-citation-workspace[hidden] { display: none !important; }
+#article-graph-builder {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  place-items: start center;
+  overflow: auto;
+  padding: clamp(8px, 2vh, 24px);
+}
+#article-graph-panel {
+  width: min(820px, 100%);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(circle at 0 0, rgba(99,102,241,0.12), transparent 40%),
+    var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
+}
+.article-graph-header {
+  padding: 20px 22px 17px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(99, 102, 241, 0.07);
+}
+.article-graph-header h2 { margin: 3px 0 4px; font-size: 1.08em; color: var(--text); }
+.article-graph-header p { max-width: 680px; margin: 0; color: var(--muted); font-size: 0.8em; line-height: 1.55; }
+#article-graph-form { display: flex; min-height: 0; flex-direction: column; gap: 12px; padding: 18px 22px 20px; }
+.article-graph-search-field { display: flex; min-width: 0; flex-direction: column; gap: 5px; color: var(--text-2); font-size: 0.74em; font-weight: 700; }
+.article-graph-search-field input,
+select.article-graph-shortcut {
+  min-height: 38px;
+  width: 100%;
+  border: 1px solid var(--border-control);
+  border-radius: 9px;
+  background: var(--glass-1);
+  color: var(--text);
+  padding: 7px 9px;
+  font: inherit;
+}
+.article-graph-search-field input { font-size: 1.2em; font-weight: 400; }
+select.article-graph-shortcut { font-size: 0.78em; }
+.article-graph-results {
+  min-height: 96px;
+  max-height: min(30vh, 280px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--veil);
+  padding: 6px;
+}
+.article-graph-empty { display: grid; min-height: 80px; place-items: center; padding: 14px; color: var(--muted); font-size: 0.78em; text-align: center; }
+.article-graph-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  gap: 12px;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.article-graph-result:hover { background: var(--glass-1); border-color: var(--border-2); }
+.article-graph-result.is-selected { background: var(--accent-soft); border-color: var(--accent-border); }
+.article-graph-result-main { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.article-graph-result-title { overflow: hidden; font-size: 0.84em; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.article-graph-result-meta { overflow: hidden; color: var(--muted); font-size: 0.72em; text-overflow: ellipsis; white-space: nowrap; }
+.article-graph-result-action { color: var(--accent-text); font-weight: 800; }
+.article-graph-shortcuts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+button.article-graph-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--glass-1);
+  color: var(--text-2);
+  font-size: 0.78em;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+button.article-graph-shortcut:hover:not(:disabled) { border-color: var(--accent-border); color: var(--text); }
+.article-graph-shortcut:disabled { opacity: 0.55; cursor: not-allowed; }
+.article-graph-shortcut-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.article-graph-selection-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; }
+.article-graph-count { color: var(--text-2); font-size: 0.78em; font-weight: 700; }
+.article-graph-selection-head .btn { min-height: 28px; padding: 3px 9px; font-size: 0.72em; }
+.article-graph-selected { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.article-graph-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 4px;
+  padding: 3px 4px 3px 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 0.76em;
+}
+.article-graph-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.article-graph-chip button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.article-graph-chip button:hover { background: var(--glass-1); color: var(--text); }
+#article-graph-citation-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+@media (max-width: 720px) {
+  #article-graph-workspace { overflow: visible; }
+  #article-graph-builder { display: block; padding: 0; overflow: visible; }
+  #article-graph-panel { width: 100%; border-radius: 12px; }
+  .article-graph-header { padding: 14px; }
+  #article-graph-form { padding: 13px 14px 14px; }
+  .article-graph-shortcuts { grid-template-columns: 1fr; }
+  #article-graph-citation-workspace { min-height: 720px; }
+}
+
 @media (max-width: 430px) {
   .research-scope-options { grid-template-columns: 1fr; }
   .research-scope-result { grid-template-columns: minmax(0, 1fr); gap: 4px; }
@@ -9202,15 +9349,39 @@ body.layout-resizing .nb-col {
 
 }
 /* Profil discret pour les machines modestes. Les calculs et les données ne changent pas. */
+html[data-performance-mode="light"],
 html[data-performance-mode="light"] *,
 html[data-performance-mode="light"] *::before,
-html[data-performance-mode="light"] *::after {
+html[data-performance-mode="light"] *::after,
+html[data-performance-mode="light"] *::backdrop {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  animation-duration: 0.001ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 0.01ms !important;
+  animation: none !important;
+  animation-delay: 0ms !important;
+  transition: none !important;
   transition-delay: 0ms !important;
+  scroll-behavior: auto !important;
+  will-change: auto !important;
+  filter: none !important;
+  box-shadow: none !important;
+}
+
+html[data-performance-mode="light"] {
+  --surface-float: var(--surface);
+  --veil: var(--surface);
+  --veil-strong: var(--surface);
+  --shadow-1: none;
+  --shadow-2: none;
+  --shadow-3: none;
+}
+
+/* Focus and the tutorial mask convey information, rather than decoration. */
+html[data-performance-mode="light"] :focus-visible {
+  outline: 2px solid var(--accent-text) !important;
+  outline-offset: 2px;
+}
+html[data-performance-mode="light"] .ft-backdrop {
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55) !important;
 }
 
 html[data-performance-mode="light"] .tab-panel.active,
@@ -9229,16 +9400,42 @@ html[data-performance-mode="light"] #toast {
 
 html[data-performance-mode="light"] .workspace-button,
 html[data-performance-mode="light"] .workspace-button:hover:not(:disabled),
-html[data-performance-mode="light"] .workspace-button:active:not(:disabled) {
-  transform: none;
+html[data-performance-mode="light"] .workspace-button:active:not(:disabled),
+html[data-performance-mode="light"] :is(.btn, .nav-item, .kg-card, .nb-card, .library-cg-card, .drafting-cta-btn, .drafting-editor-shell, .drafting-side-shell, .drafting-bibliography-shell, #send-btn, #nb-send-btn):is(:hover, :active),
+html[data-performance-mode="light"] .library-cg-card-arrow {
+  transform: none !important;
   transition: none !important;
 }
 
 html[data-performance-mode="light"] .spinner,
 html[data-performance-mode="light"] .kg-busy-orbit,
-html[data-performance-mode="light"] .startup-guide-status.checking::before {
-  animation-duration: 1.4s !important;
-  animation-iteration-count: infinite !important;
+html[data-performance-mode="light"] .startup-guide-status.checking::before,
+html[data-performance-mode="light"] .discovery-empty-state.is-loading .discovery-empty-icon,
+html[data-performance-mode="light"] .skeleton::after,
+html[data-performance-mode="light"] .cursor {
+  display: none !important;
+}
+
+html[data-performance-mode="light"] :is(.status-wait-text, .thinking-block.is-live .thinking-label) {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--text-2);
+}
+
+/* These SVG paths otherwise rely on their entrance animation to be visible. */
+html[data-performance-mode="light"] .kg-link {
+  stroke-dashoffset: 0 !important;
+  opacity: 1;
+}
+html[data-performance-mode="light"] .kg-link-dot {
+  opacity: 0.82;
+  transform: none;
+}
+
+html[data-performance-mode="light"] :is(#startup-boot-progress, .kg-busy-progress, .index-transfer-progress-bar.is-indeterminate, .ocr-quickfix-bar.is-indeterminate, .update-overlay-progress.is-indeterminate) > span {
+  width: 100%;
+  opacity: 0.4;
+  transform: none;
 }
 
 /* ---------------------------------------------

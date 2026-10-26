@@ -162,7 +162,7 @@
     if (!byId('settings-panel')?.classList.contains('open')) toggleSettings();
     switchSettingsTab('documents');
     window.setTimeout(() => {
-      byId('settings-scans')?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      byId('settings-scans')?.scrollIntoView?.({ block: 'center', behavior: preferredScrollBehavior() });
     }, 80);
   }
   function progressOf(data) {
@@ -617,7 +617,7 @@
   function focusQuickFix() {
     window.setTimeout(() => {
       const card = byId('settings-scans');
-      card?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      card?.scrollIntoView?.({ block: 'nearest', behavior: preferredScrollBehavior() });
       const start = byId('ocr-quickfix-start');
       (start && !start.closest('[hidden]') ? start : card?.querySelector('button:not([hidden])'))?.focus();
     }, 80);
@@ -654,7 +654,7 @@
       const wrap = byId('ocr-errors-wrap');
       if (!wrap) return;
       wrap.open = true;
-      wrap.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      wrap.scrollIntoView?.({ block: 'nearest', behavior: preferredScrollBehavior() });
       byId('ocr-errors')?.focus();
     });
     refreshInventory();

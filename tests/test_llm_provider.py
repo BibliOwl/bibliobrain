@@ -961,3 +961,84 @@ def test_raw_or_unknown_prompt_scheme_keeps_the_embedder(scheme: str | None) -> 
     inner = _RecordingEmbedder()
 
     assert llm_provider.with_embedding_prompts(inner, scheme) is inner
+
+
+def _serve_openai_stream(chunks: list[dict], *, done: bool):
+    """Local OpenAI-compatible server that streams ``chunks`` then closes cleanly."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for chunk in chunks:
+                payload = {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m"}
+                self.wfile.write(b"data: " + json.dumps({**payload, **chunk}).encode() + b"\n\n")
+            if done:
+                self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+        def log_message(self, *args) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _content_chunk(text: str, finish_reason: str | None = None) -> dict:
+    return {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": finish_reason}]}
+
+
+@pytest.mark.parametrize(
+    ("chunks", "done", "complete"),
+    [
+        ([_content_chunk("1 µV/cm"), _content_chunk("", "stop")], True, True),
+        # Some servers end on a usage-only chunk after the finish_reason one.
+        ([_content_chunk("1 µV/cm", "stop"), {"choices": []}], True, True),
+        # A clean close after a valid fragment, no finish_reason and no [DONE].
+        ([_content_chunk("1 µV/cm")], False, False),
+    ],
+)
+def test_openai_compatible_stream_cut_before_its_end_is_an_error(
+    chunks: list[dict], done: bool, complete: bool
+) -> None:
+    from langchain_openai import ChatOpenAI
+    from pydantic import SecretStr
+
+    server = _serve_openai_stream(chunks, done=done)
+    try:
+        llm = ChatOpenAI(
+            model="m",
+            api_key=SecretStr("k"),
+            base_url=f"http://127.0.0.1:{server.server_port}/v1",
+            max_retries=0,
+        )
+        received: list[str] = []
+        if complete:
+            received.extend(llm_provider.stream_text(llm, [("user", "q")]))
+        else:
+            with pytest.raises(llm_provider.IncompleteStreamError):
+                received.extend(llm_provider.stream_text(llm, [("user", "q")]))
+        assert "".join(received) == "1 µV/cm"
+    finally:
+        server.shutdown()
+
+
+def test_structured_stream_cut_before_its_end_is_an_error() -> None:
+    from openai import OpenAI
+
+    server = _serve_openai_stream([_content_chunk('{"answer": "1')], done=False)
+    try:
+        client = OpenAI(
+            base_url=f"http://127.0.0.1:{server.server_port}/v1", api_key="k", max_retries=0
+        )
+        with pytest.raises(llm_provider.IncompleteStreamError):
+            llm_provider._stream_chat_completion(
+                client, {"model": "m", "messages": [{"role": "user", "content": "q"}]}
+            )
+    finally:
+        server.shutdown()

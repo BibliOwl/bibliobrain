@@ -52,7 +52,7 @@ async function main() {
       window.showToast = (msg) => { window.lastToast = msg; };
       window.copyTextWithFallback = async text => { window.copiedText = text; return true; };
     });
-    for (const file of ['static/js/app.js', 'static/js/event-bindings.js', 'static/js/app/drafting.js', 'static/js/app/drafting-interop.js']) {
+    for (const file of ['static/js/boot.js', 'static/js/app.js', 'static/js/event-bindings.js', 'static/js/app/drafting.js', 'static/js/app/drafting-interop.js']) {
       await page.addScriptTag({ path: path.join(root, file) });
     }
     // Real clipboard HTML from Word 16 with Zotero fields, with and without a

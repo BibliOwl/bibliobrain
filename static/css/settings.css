@@ -2096,6 +2096,27 @@
   line-height: 1.5;
   white-space: pre-wrap;
 }
+/* How this installation updates: ZIP steps or Git state (updates.js). */
+.update-mode-panel {
+  margin: 0 18px 12px;
+  padding: 12px 14px;
+  font-size: 0.8em;
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.update-mode-panel[hidden] { display: none; }
+.update-mode-panel h3 { margin: 0 0 6px; font-size: 0.95em; color: var(--text); }
+.update-mode-panel p { margin: 0 0 6px; }
+.update-mode-panel ol { margin: 8px 0 10px; padding-left: 1.4em; }
+.update-zip-manual summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.update-mode-panel li { margin: 2px 0; }
+.update-mode-panel code { overflow-wrap: anywhere; }
+.update-mode-panel ul.update-git-changes { margin: 0 0 6px; padding-left: 1.2em; font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
+.update-mode-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.update-mode-actions .btn { text-decoration: none; font-size: 0.975em; }
+.update-mode-panel[data-state="warning"] { border-color: var(--warning); background: var(--warning-soft); }
 .startup-update-choice {
   display: flex;
   align-items: flex-start;

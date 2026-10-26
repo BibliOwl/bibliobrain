@@ -77,7 +77,9 @@ def test_versions_compare_like_semver(left: str, right: str, expected: int) -> N
     assert compare_versions(left, right) == expected
 
 
-@pytest.mark.skipif(os.name != "nt", reason="The maintenance manager is a Windows PowerShell script")
+@pytest.mark.skipif(
+    os.name != "nt", reason="The maintenance manager is a Windows PowerShell script"
+)
 def test_manager_orders_versions_like_the_application() -> None:
     """The manager accepts or refuses an installer with the application's own ordering.
 
@@ -214,7 +216,9 @@ def test_build_manifest_describes_the_zip_package(workspace_tmp_dir: Path) -> No
 
 
 def _load_release_tools():
-    spec = importlib.util.spec_from_file_location("release_tools", ROOT / "scripts/release_tools.py")
+    spec = importlib.util.spec_from_file_location(
+        "release_tools", ROOT / "scripts/release_tools.py"
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -289,7 +293,9 @@ def test_manual_check_works_even_when_daily_checks_are_off(
 ) -> None:
     def missing(url: str) -> dict:
         request = httpx.Request("GET", url)
-        raise httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+        raise httpx.HTTPStatusError(
+            "404", request=request, response=httpx.Response(404, request=request)
+        )
 
     monkeypatch.setattr(update_check, "_fetch_manifest", missing)
     app_settings.set_app_settings(update_check_enabled=False)
@@ -375,25 +381,19 @@ def test_manager_command_runs_the_app_driven_update() -> None:
     assert command[-2:] == ["-InstallerPath", str(Path("C:/updates/Bibliobrain-Setup-9.0.0.exe"))]
 
 
-def test_manager_command_passes_a_zip_package_as_archive() -> None:
-    command = update_check._manager_command(Path("C:/updates/Bibliobrain-Windows-9.0.0.zip"))
-
-    assert command[-2:] == ["-ArchivePath", str(Path("C:/updates/Bibliobrain-Windows-9.0.0.zip"))]
-    assert "-InstallerPath" not in command
-
-
 def test_zip_installs_update_from_the_archive_never_the_installer(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_root = isolated_home / "install"
     install_root.mkdir()
     monkeypatch.setattr(update_check, "REPO_ROOT", install_root)
+    monkeypatch.delenv("BIBLIOBRAIN_INSTALL_MODE", raising=False)
     assert update_check.install_mode() == "packaged"
     (install_root / "ZIP-PACKAGE.txt").write_text("zip", encoding="utf-8")
     assert update_check.install_mode() == "zip"
 
     monkeypatch.setattr(update_check, "MANAGER_SCRIPT", ROOT / "scripts/bibliobrain-manager.ps1")
-    monkeypatch.setattr(update_check.os, "name", "nt")
+    monkeypatch.setattr(update_check, "_is_windows", lambda: True)
     monkeypatch.setenv("BIBLIOBRAIN_MANAGED_SERVER", "1")
     # A release without a ZIP package must not fall back to Setup.exe.
     assert update_check._install_blocker(validate_manifest(_manifest())) == "no_archive"
@@ -420,12 +420,234 @@ def test_zip_installs_update_from_the_archive_never_the_installer(
     assert launched[0][-2:] == ["-ArchivePath", str(downloaded)]
 
 
+def test_zip_installs_also_get_the_manual_steps_and_a_background_download(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BIBLIOBRAIN_INSTALL_MODE", "zip")
+    monkeypatch.setattr(update_check, "_is_windows", lambda: True)
+    monkeypatch.setattr(update_check, "_last_auto_attempt", 0.0)
+    payload = b"zip package"
+    archive = {**ARCHIVE, "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)}
+    manifest = validate_manifest({**_manifest(), "archive": archive})
+    update_check._save_state({"checked_at": time.time(), "manifest": manifest})
+    requested: list[str] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200, content=payload)
+
+    _client_with_transport(monkeypatch, serve)
+    app_settings.set_app_settings(update_check_enabled=True)
+
+    assert update_check.get_status()["zip_guide"] == {
+        "download_url": ARCHIVE["url"],
+        "releases_url": manifest["notes_url"],
+        "install_dir": str(update_check.REPO_ROOT),
+        "file_name": "Bibliobrain-Windows.zip",
+    }
+    assert update_check.start_background_download() is True
+    _wait_for_job("ready")
+
+    assert requested == [ARCHIVE["url"]]
+    assert update_check.get_status()["downloaded"] is True
+    launched: list[list[str]] = []
+    monkeypatch.setattr(update_check, "_launch_manager", launched.append)
+    update_check._run_update(manifest)
+    assert len(requested) == 1
+    assert launched[0][-2:] == [
+        "-ArchivePath",
+        str(isolated_home / "storage/updates/Bibliobrain-Windows-9.0.0.zip"),
+    ]
+
+
+def test_manager_command_passes_a_zip_package_as_archive() -> None:
+    command = update_check._manager_command(Path("C:/updates/Bibliobrain-Windows-9.0.0.zip"))
+
+    assert command[-2:] == ["-ArchivePath", str(Path("C:/updates/Bibliobrain-Windows-9.0.0.zip"))]
+    assert "-InstallerPath" not in command
+
+
+def test_install_mode_can_be_forced_to_preview_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BIBLIOBRAIN_INSTALL_MODE", "zip")
+    assert update_check.install_mode() == "zip"
+    monkeypatch.setenv("BIBLIOBRAIN_INSTALL_MODE", "nonsense")
+    assert update_check.install_mode() in {"git", "zip", "packaged"}
+
+
+def _packaged_windows(isolated_home: Path, monkeypatch: pytest.MonkeyPatch, payload: bytes) -> dict:
+    monkeypatch.setenv("BIBLIOBRAIN_INSTALL_MODE", "packaged")
+    monkeypatch.setattr(update_check, "_is_windows", lambda: True)
+    monkeypatch.setattr(update_check, "_last_auto_attempt", 0.0)
+    manifest = validate_manifest(
+        _manifest(sha256=hashlib.sha256(payload).hexdigest(), size=len(payload))
+    )
+    update_check._save_state({"checked_at": time.time(), "manifest": manifest})
+    return manifest
+
+
+def _wait_for_job(*phases: str) -> dict:
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        job = update_check._job_snapshot()
+        if job["phase"] in phases:
+            return job
+        time.sleep(0.02)
+    raise AssertionError(update_check._job_snapshot())
+
+
+def test_packaged_installs_download_the_installer_ahead_of_the_click(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"signed installer"
+    manifest = _packaged_windows(isolated_home, monkeypatch, payload)
+    requested: list[str] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200, content=payload)
+
+    _client_with_transport(monkeypatch, serve)
+
+    # No consent yet: nothing leaves the machine.
+    assert update_check.start_background_download() is False
+    app_settings.set_app_settings(update_check_enabled=True)
+    assert update_check.start_background_download() is True
+    _wait_for_job("ready")
+
+    assert update_check._ready_package(manifest, "packaged") is not None
+    assert update_check.get_status()["downloaded"] is True
+    # Already on disk: no second download.
+    assert update_check.start_background_download() is False
+    assert len(requested) == 1
+
+    # The click installs the verified file without downloading it again.
+    launched: list[list[str]] = []
+    monkeypatch.setattr(update_check, "_launch_manager", launched.append)
+    update_check._run_update(manifest)
+    assert len(requested) == 1
+    assert launched[0][-2:] == [
+        "-InstallerPath",
+        str(isolated_home / "storage/updates/Bibliobrain-Setup-9.0.0.exe"),
+    ]
+
+
+def test_an_installer_altered_on_disk_is_downloaded_again(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"signed installer"
+    manifest = _packaged_windows(isolated_home, monkeypatch, payload)
+    _client_with_transport(monkeypatch, lambda request: httpx.Response(200, content=payload))
+    update_check._download_installer(manifest["installer"], "9.0.0")
+    update_check._remember_download(manifest, manifest["installer"])
+    target = isolated_home / "storage/updates/Bibliobrain-Setup-9.0.0.exe"
+    target.write_bytes(b"x" * len(payload))
+
+    assert update_check._verified_ready_package(manifest, "packaged") is None
+    assert not target.exists()
+
+
+def test_a_click_during_the_background_download_installs_when_it_ends(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"signed installer"
+    manifest = _packaged_windows(isolated_home, monkeypatch, payload)
+    _client_with_transport(monkeypatch, lambda request: httpx.Response(200, content=payload))
+    launched: list[list[str]] = []
+    monkeypatch.setattr(update_check, "_launch_manager", launched.append)
+    with update_check._job_lock:
+        update_check._job.update(phase="downloading", percent=10, background=True)
+    monkeypatch.setenv("BIBLIOBRAIN_MANAGED_SERVER", "1")
+    monkeypatch.setattr(update_check, "MANAGER_SCRIPT", ROOT / "scripts/bibliobrain-manager.ps1")
+
+    assert update_check.start_update() == {"ok": True, "code": ""}
+    assert update_check._job_snapshot()["install_when_ready"] is True
+
+    update_check._run_background_download(manifest, "packaged")
+
+    assert update_check._job_snapshot()["phase"] == "restarting"
+    assert launched and launched[0][-1].endswith("Bibliobrain-Setup-9.0.0.exe")
+
+
+def test_a_failed_background_download_stays_quiet(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _packaged_windows(isolated_home, monkeypatch, b"signed installer")
+    _client_with_transport(
+        monkeypatch, lambda request: httpx.Response(200, content=b"tampered!!!!!!!!")
+    )
+
+    update_check._run_background_download(manifest, "packaged")
+
+    assert update_check._job_snapshot()["phase"] == "idle"
+    assert update_check._ready_package(manifest, "packaged") is None
+
+
+def _git_status(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    monkeypatch.setattr(update_check.shutil, "which", lambda name: "/usr/bin/git")
+    monkeypatch.setattr(
+        update_check,
+        "_git",
+        lambda *args: subprocess.CompletedProcess(args, 0, stdout=output, stderr=""),
+    )
+
+
+def test_git_state_reads_branch_upstream_and_local_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _git_status(
+        monkeypatch, "## main...gitea/main [ahead 1, behind 3]\n M src/app.py\nA  notes.md\n"
+    )
+
+    state = update_check.git_state()
+
+    assert state["branch"] == "main"
+    assert state["upstream"] == "gitea/main"
+    assert (state["ahead"], state["behind"]) == (1, 3)
+    assert state["changes"] == ["src/app.py", "notes.md"]
+    assert state["change_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("output", "blocker"),
+    [
+        ("## main...origin/main\n", ""),
+        ("## main...origin/main\n M src/app.py\n", "git_dirty"),
+        ("## feature/x\n", "git_no_upstream"),
+        ("## HEAD (no branch)\n", "git_no_upstream"),
+    ],
+)
+def test_git_pull_is_refused_while_tracked_files_are_modified(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch, output: str, blocker: str
+) -> None:
+    _git_status(monkeypatch, output)
+    monkeypatch.setenv("BIBLIOBRAIN_INSTALL_MODE", "git")
+    monkeypatch.setenv("BIBLIOBRAIN_MANAGED_SERVER", "1")
+    monkeypatch.setattr(update_check, "_is_windows", lambda: True)
+    monkeypatch.setattr(update_check, "MANAGER_SCRIPT", ROOT / "scripts/bibliobrain-manager.ps1")
+    launched: list[list[str]] = []
+    monkeypatch.setattr(update_check, "_launch_manager", launched.append)
+
+    # No release needed: a checkout can pull whenever its remote moved.
+    status = update_check.get_status()
+    assert status["update_available"] is False
+    assert status["install_blocker"] == blocker
+    result = update_check.start_update()
+
+    if blocker:
+        assert result == {"ok": False, "code": blocker}
+        assert launched == []
+    else:
+        assert result == {"ok": True, "code": ""}
+        deadline = time.time() + 5
+        while not launched and time.time() < deadline:
+            time.sleep(0.02)
+        assert launched and "-InstallerPath" not in launched[0]
+
+
 def test_development_servers_never_update_themselves(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(update_check, "_fetch_manifest", lambda url: validate_manifest(_manifest()))
     update_check.check_now(force=True)
-    monkeypatch.setattr(update_check.os, "name", "nt")
+    monkeypatch.setattr(update_check, "_is_windows", lambda: True)
 
     result = update_check.start_update()
 
@@ -510,9 +732,7 @@ def test_the_update_is_refused_up_front_on_a_full_disk(
         return httpx.Response(200)
 
     _client_with_transport(monkeypatch, record)
-    monkeypatch.setattr(
-        update_check.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000)
-    )
+    monkeypatch.setattr(update_check.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
     installer = {
         "url": "https://github.com/owner/repo/releases/download/v9.0.0/Bibliobrain-Setup.exe",
         "sha256": "0" * 64,

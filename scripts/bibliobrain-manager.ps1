@@ -945,6 +945,18 @@ function Update-ZipBibliobrain {
     Write-Host "Bibliobrain ZIP update completed." -ForegroundColor Green
 }
 
+function Get-GitTrackedChanges {
+    # Empty when Git cannot read the checkout (another owner...): the pull
+    # below then reports the real problem, and --ff-only still overwrites nothing.
+    $safeRepoRoot = [System.IO.Path]::GetFullPath($RepoRoot).Replace("\", "/")
+    $ErrorActionPreference = "Continue"
+    $lines = @(& git -c "safe.directory=$safeRepoRoot" -C $RepoRoot status --porcelain --untracked-files=no 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return @()
+    }
+    return @($lines | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+}
+
 function Invoke-GitFastForwardPull {
     param([switch]$AllowDifferentOwner)
 
@@ -1031,6 +1043,13 @@ function Update-Bibliobrain {
     }
     if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
         throw "Git is required to update this checkout. Install Git or download the newest Bibliobrain package."
+    }
+    # Same rule as git_state() in src/update_check.py: never pull over files
+    # the user changed. Untracked files do not count; Git guards them itself.
+    $localChanges = @(Get-GitTrackedChanges)
+    if ($localChanges.Count -gt 0) {
+        $listed = ($localChanges | Select-Object -First 8 | ForEach-Object { "  " + $_ }) -join [Environment]::NewLine
+        throw "This checkout has local changes to tracked files, so nothing was updated:$([Environment]::NewLine)$listed$([Environment]::NewLine)Commit or stash them (git commit / git stash), then update again."
     }
     Backup-BeforeUpdate
     $allowDifferentOwner = $false

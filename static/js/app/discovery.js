@@ -9,7 +9,8 @@ function setDiscoveryStatus(msg, loading = false, actionHtml = '') {
   const text = _tr(String(msg || ''));
   status.style.display = text ? '' : 'none';
   status.classList.toggle('is-loading', Boolean(loading));
-  status.innerHTML = `${escapeHtml(text).replace(/\n/g, '<br>')}${actionHtml || ''}`;
+  const html = `${escapeHtml(text).replace(/\n/g, '<br>')}${actionHtml || ''}`;
+  if (status.innerHTML !== html) status.innerHTML = html;
 }
 
 function setDiscoveryResultsMeta(count = 0) {
@@ -65,12 +66,19 @@ function openExternalDiscoverySettings() {
   openExternalApiSettings();
 }
 
+let _discoveryProgressRender = null;
+
 function stopDiscoveryProgressMessages() {
   if (state.discoveryProgressTimer) {
     clearInterval(state.discoveryProgressTimer);
     state.discoveryProgressTimer = null;
   }
+  _discoveryProgressRender = null;
 }
+
+document.addEventListener('visibilitychange', () => _discoveryProgressRender?.());
+window.addEventListener('bibliobrain:tabchange', () => _discoveryProgressRender?.());
+window.addEventListener('bibliobrain:languagechange', () => _discoveryProgressRender?.());
 
 function startDiscoveryProgressMessages(mode) {
   stopDiscoveryProgressMessages();
@@ -80,15 +88,18 @@ function startDiscoveryProgressMessages(mode) {
     : _tr('Analyse de votre demande de recherche…');
   const startedAt = Date.now();
   state.discoveryStartedAt = startedAt;
+  setDiscoveryStatus('', false);
+  renderDiscoveryEmptyState(_tr('Recherche en cours'), '', { loading: true });
+  const title = resultRoot?.querySelector('.empty-state-title');
+  const message = resultRoot?.querySelector('.empty-state-text');
   const renderStep = () => {
+    if (!isVisualUpdateVisible(resultRoot)) return;
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
-    setDiscoveryStatus('', false);
-    if (resultRoot) renderDiscoveryEmptyState(
-      _tr('Recherche en cours'),
-      `${state.discoveryLiveMessage} (${elapsed} s)`,
-      { loading: true },
-    );
+    if (title) title.textContent = _tr('Recherche en cours');
+    const text = `${state.discoveryLiveMessage} (${elapsed} s)`;
+    if (message && message.textContent !== text) message.textContent = text;
   };
+  _discoveryProgressRender = renderStep;
   renderStep();
   state.discoveryProgressTimer = setInterval(renderStep, 1000);
 }
@@ -771,7 +782,11 @@ async function runArticleDiscovery() {
             _renderDiscoveryResults({ ok: true, ...event, preliminary: true });
             state.discoveryLiveMessage = _tr('Premiers résultats affichés. Le modèle vérifie leur pertinence…');
             showLiveStatus(state.discoveryLiveMessage, event.meta);
-            liveTimer = setInterval(() => showLiveStatus(state.discoveryLiveMessage, state.discoveryPreliminaryMeta), 1000);
+            liveTimer = setInterval(() => {
+              if (isVisualUpdateVisible(document.getElementById('discovery-status'))) {
+                showLiveStatus(state.discoveryLiveMessage, state.discoveryPreliminaryMeta);
+              }
+            }, 1000);
           } else if (event?.type === 'done') {
             d = event.payload || { ok: false, msg: 'article_discovery_failed' };
           }
