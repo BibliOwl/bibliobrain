@@ -36,6 +36,13 @@ largement pour les questions difficiles.
 
 ## Restreindre les sources
 
+Dans une conversation existante, ouvrez **Options > Filtrer par article**, cherchez
+un titre (même partiel), un auteur ou une année, puis sélectionnez l’article. Les prochaines réponses
+utiliseront cet article sans créer de nouvelle conversation. Seuls les articles
+indexés et inclus dans le RAG sont proposés. La recherche ignore la casse et les
+accents. Le filtre reste affiché au-dessus du champ de saisie ; cliquez sur **×**
+pour le retirer ou choisissez un autre article pour le remplacer.
+
 Si Zotero est connecté, **Options > Filtres Zotero** (sous le champ de saisie) limite le
 chat à certains **tags** ou **collections** ; le bouton de réinitialisation du panneau
 retire les filtres.

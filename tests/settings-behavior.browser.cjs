@@ -359,6 +359,19 @@ async function main() {
     assert.equal(await temperatureReset.isDisabled(), true);
     assert.equal(await page.evaluate(() => window.temperatureChanges), 1);
 
+    // The answer length resets to Auto, the backend default (it used to say Standard).
+    await page.evaluate(() => { filterSettings(''); switchSettingsTab('expert-search'); });
+    const lengthRow = page.locator('#chat-answer-length').locator('xpath=ancestor::div[contains(concat(" ", @class, " "), " settings-row ")][1]');
+    const lengthReset = lengthRow.locator('.settings-reset-one');
+    await page.selectOption('#chat-answer-length', 'detailed');
+    await page.evaluate(() => refreshSettingsDefaults());
+    assert.match(await lengthRow.textContent(), /Par défaut : Auto/);
+    assert.equal(await lengthReset.isDisabled(), false);
+    await lengthReset.click();
+    await page.waitForFunction(() => document.getElementById('chat-answer-length').value === 'auto');
+    assert.equal(await lengthReset.isDisabled(), true);
+    assert.match(await lengthRow.textContent(), /Par défaut : Auto/);
+
     await page.evaluate(() => { state.appSettings.first_rag_init_done = true; switchSettingsTab('research'); closeSettings(); toggleSettings(); });
     assert.equal(await page.locator('#settings-pane-online').isVisible(), true, 'The former research tab opens Finding articles online');
     await page.click('#settings-semantic-key-btn');
@@ -583,7 +596,7 @@ async function main() {
     }), true, 'Keyboard focus remains inside the dialog');
     assert.equal(new Set(await page.locator('[id]').evaluateAll(els => els.map(el => el.id))).size, await page.locator('[id]').count(), 'No duplicate HTML IDs');
     assert.deepEqual(errors, []);
-    console.log('PASS: provider cards, failed switch, stale response, remote setup, retained drafts, search across modes, failed save/retry, per-setting reset, last tab, prompt editor, OCR explicit save, Fix this flow and its blocked cards, Expert door, desktop/mobile, English, keyboard focus, unique IDs.');
+    console.log('PASS: provider cards, failed switch, stale response, remote setup, retained drafts, search across modes, failed save/retry, per-setting reset (answer length to Auto), last tab, prompt editor, OCR explicit save, Fix this flow and its blocked cards, Expert door, desktop/mobile, English, keyboard focus, unique IDs.');
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));

@@ -866,12 +866,23 @@ function _renderStartupDocumentCount() {
 // Backend progress lines are technical (batches, chunks, workers, file
 // names). The assistant shows one plain sentence; the raw line stays in the
 // tooltip for anyone who wants it.
-function _startupProgressMessage(percent) {
+// With the step the server reported ("Step 2 of 3 · …"), a step that starts
+// lower reads as the next step rather than a restart.
+function _startupProgressMessage(percent, event = null) {
   const value = Math.round(Math.max(0, Math.min(100, Number(percent) || 0)));
   const count = state.startupDocumentCount;
-  return Number.isInteger(count) && count > 0
+  const stage = Number(event?.stage || 0);
+  const stageCount = Number(event?.stage_count || 0);
+  if (stage && stageCount && stage !== 2) {
+    const label = _ti(`rag.stage.${event.stage_key || 'check'}`);
+    return _ti('startup.buildingStep', { stage, count: stageCount, label, percent: value });
+  }
+  const message = Number.isInteger(count) && count > 0
     ? _ti('startup.buildingProgressCount', { count, percent: value })
     : _ti('startup.buildingProgress', { percent: value });
+  return stage && stageCount
+    ? `${_ti('startup.buildingStepPrefix', { stage, count: stageCount })} ${message}`
+    : message;
 }
 
 function setStartupStep(stepName, { focusHeading = false } = {}) {
@@ -1188,7 +1199,9 @@ async function saveStartupLibrary({ allowEmptyFolder = false } = {}) {
     const documentCount = Number.isInteger(dataPathResult.document_count)
       ? dataPathResult.document_count
       : null;
-    state.startupDocumentCount = documentCount;
+    // What will be read once the "read only part of the folder" choice applies.
+    const keptCount = documentCount ? await window.fetchIndexSelectionKeptCount?.() : null;
+    state.startupDocumentCount = Number.isInteger(keptCount) ? keptCount : documentCount;
     if (documentCount === 0 && !allowEmptyFolder) {
       setStartupGuideStatus('startup-library-status', _ti('startup.pdfFolderEmpty'), 'error');
       dataInput?.focus();
@@ -1423,7 +1436,7 @@ async function _followExternalStartupBuild() {
       const sidebarWidth = parseFloat(document.getElementById('init-progress-bar')?.style.width || '0');
       const percent = Math.max(4, sidebarWidth || 0);
       setStartupBuildProgress(percent);
-      setStartupGuideStatus('startup-build-status', _startupProgressMessage(percent), 'checking');
+      setStartupGuideStatus('startup-build-status', _startupProgressMessage(percent, state.ragLastProgressEvent), 'checking');
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
     }
     const refreshed = await fetchStartupStatus();
@@ -1483,8 +1496,8 @@ async function startStartupRagBuild() {
       onProgress: (event) => {
         const percent = Math.max(4, Number(event.frac || 0) * 100);
         setStartupBuildProgress(percent);
-        setStartupGuideStatus('startup-build-status', _startupProgressMessage(percent), 'checking', {
-          detail: event.desc || '',
+        setStartupGuideStatus('startup-build-status', _startupProgressMessage(percent, event), 'checking', {
+          detail: event.raw_desc || event.desc || '',
         });
       },
     });

@@ -4,8 +4,11 @@ RAG global state variables + pause / resume control.
 
 from __future__ import annotations
 
+import contextlib
+import itertools
 import os
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from os import environ
 from pathlib import Path
@@ -29,6 +32,41 @@ def _noop_progress(frac: float, desc: str = "") -> None:
 
 # ------ Runtime globals (reset on reload / pause) ---------------
 _state_lock = RLock()
+
+# ------ Answers reading the loaded index -------------------------------------
+# A chat answer or a literature review reads ``vectorstore`` for its whole
+# stream, long after the init lock is released. Switching library closes that
+# store: it waits for no reader and refuses while one runs. An entry older than
+# _READER_STALE_SECONDS (a stream never closed) no longer blocks.
+_READER_STALE_SECONDS = 30 * 60
+_vector_readers_lock = RLock()
+_vector_readers: dict[int, float] = {}
+_vector_reader_ids = itertools.count(1)
+
+
+def begin_vector_reader() -> int:
+    with _vector_readers_lock:
+        token = next(_vector_reader_ids)
+        _vector_readers[token] = time.monotonic()
+        return token
+
+
+def end_vector_reader(token: int) -> None:
+    with _vector_readers_lock:
+        _vector_readers.pop(token, None)
+
+
+@contextlib.contextmanager
+def vector_readers_paused() -> Iterator[int]:
+    """Hold new readers back; yields how many still read the index."""
+    with _vector_readers_lock:
+        now = time.monotonic()
+        active = sum(
+            1 for started in _vector_readers.values() if now - started < _READER_STALE_SECONDS
+        )
+        yield active
+
+
 # Stands for the answer chain when the index was prepared before any chat
 # model was installed: questions build their own chat model.
 INDEX_ONLY_CHAIN: Any = object()
@@ -36,7 +74,7 @@ document_chain: Any = None
 vectorstore: Any = None
 last_sources: list[Document] = []
 _zotero_library: dict[str, ZoteroItem] = {}
-_max_chunks_default: int = 6
+_max_chunks_default: int = 8
 runtime_model: str = ""
 runtime_threshold: float | None = None
 runtime_chunk_size: int | None = None
@@ -61,9 +99,9 @@ _vector_load_pause_event = Event()
 _vector_load_suspend_event = Event()
 
 try:
-    _chat_cap_raw = int(environ.get("RAG_CHAT_MAX_CHUNKS_CAP", "8"))
+    _chat_cap_raw = int(environ.get("RAG_CHAT_MAX_CHUNKS_CAP", "12"))
 except (TypeError, ValueError):
-    _chat_cap_raw = 8
+    _chat_cap_raw = 12
 _CHAT_MAX_CHUNKS_CAP = max(1, min(12, _chat_cap_raw))
 
 

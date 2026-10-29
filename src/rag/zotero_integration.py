@@ -294,11 +294,18 @@ def _refresh_zotero_library_cache() -> None:
 def _filter_active_zotero_pdf_entries(
     pdf_entries: list[tuple[str, str]],
 ) -> list[tuple[str, str]]:
+    """Documents the index reads: active Zotero attachments, then the user's
+    selection (collections, sub-folders, size guard; see src/index_selection.py)."""
+    from src.index_selection import apply_index_selection, remember_skipped
+
     with state._state_lock:
         library = dict(state._zotero_library)
-    return filter_active_zotero_pdf_entries(
+    active = filter_active_zotero_pdf_entries(
         pdf_entries,
         library,
         data_path=config.DATA_PATH,
         zotero_db_path=config.ZOTERO_DB_PATH,
     )
+    kept, skipped = apply_index_selection(active, library)
+    remember_skipped(skipped)
+    return kept

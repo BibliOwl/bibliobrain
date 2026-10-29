@@ -79,6 +79,9 @@ function switchSettingsTab(tabName, btn = null) {
   ) {
     loadRemoteEmbeddingModels({ silent: true });
   }
+  if (target === 'documents' && typeof window.loadIndexSelection === 'function') {
+    void window.loadIndexSelection();
+  }
   if (btn) btn.blur();
   const activeTab = document.querySelector('#settings-tabs .settings-tab.active');
   if (window.innerWidth <= 820) activeTab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -333,6 +336,7 @@ function refreshSettingsDefaults() {
   const retrievalDefault = Number(value('threshold')) === research.threshold
     && Number(value('max-chunks')) === research.maxChunks
     && Number(value('chunk-size')) === research.chunkSize
+    && value('chat-answer-length') === research.chatAnswerLength
     && checked('reranker-enabled') === research.rerankerEnabled
     && value('reranker-profile') === research.rerankerProfile
     && checked('reranker-translate-french') === research.rerankerTranslateFrench;
@@ -705,6 +709,7 @@ function settingsExpertDefaults() {
     'llm-top-p': llm.topP,
     threshold: research.threshold,
     'max-chunks': research.maxChunks,
+    'chat-answer-length': research.chatAnswerLength,
     'reranker-enabled': research.rerankerEnabled,
     'reranker-profile': research.rerankerProfile,
     'reranker-translate-french': research.rerankerTranslateFrench,
@@ -782,7 +787,7 @@ function resetSettingsRow(row) {
 async function resetAllExpertSettings() {
   if (!window.confirm(_ti('settings.expert.resetAllConfirm'))) return;
   _settingsDefaultRows().forEach((controls, row) => {
-    if (controls.some(([input]) => ['llm-temperature', 'llm-repeat-penalty', 'llm-top-p', 'threshold', 'max-chunks', 'chunk-size', 'reranker-enabled'].includes(input.id))) return;
+    if (controls.some(([input]) => ['llm-temperature', 'llm-repeat-penalty', 'llm-top-p', 'threshold', 'max-chunks', 'chat-answer-length', 'chunk-size', 'reranker-enabled'].includes(input.id))) return;
     resetSettingsRow(row);
   });
   await resetLlmGenerationSettings();

@@ -2988,6 +2988,35 @@ def test_build_chat_debug_metrics_includes_answer_origin(workspace_tmp_dir: Path
     assert metrics["answer_origin"] == "wiki+rag"
 
 
+def test_chat_endpoint_stores_the_answer_length(workspace_tmp_dir: Path, monkeypatch: Any) -> None:
+    storage_dir = workspace_tmp_dir / "storage"
+    data_dir = workspace_tmp_dir / "data"
+    app_api = _load_app_api_module(storage_dir, data_dir)
+    length = {"setting": "auto", "resolved": "concise", "list": False, "num_predict": 450}
+
+    def fake_stream_chat_api(message: str, model_name: str, threshold: float, **kwargs: Any):
+        yield {"type": "answer_length", "data": dict(length)}
+        yield {"type": "token", "text": "YBa2Cu3O7 [S1]."}
+        yield {"type": "sources", "data": [], "answer_origin": "rag"}
+
+    monkeypatch.setattr(app_api, "stream_chat_api", fake_stream_chat_api)
+
+    client = TestClient(app_api.app)
+    with client.stream(
+        "POST",
+        "/api/chat",
+        json={"message": "Quelle est la formule des REBCO ?", "model": "demo-model", "threshold": 0.2},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert '"type": "answer_length"' not in body
+    chat_id = app_api.list_conversations()[0]["id"]
+    saved = [m for m in app_api.get_conversation_messages(chat_id) if m["role"] == "assistant"]
+    assert saved[-1]["meta"]["answer_length"] == length
+    assert saved[-1]["meta"]["debug_metrics"]["answer_length"] == length
+
+
 def test_chat_endpoint_scopes_quick_library_question_to_selected_article(
     workspace_tmp_dir: Path, monkeypatch: Any
 ) -> None:

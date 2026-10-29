@@ -18,6 +18,66 @@ It is read by `src/version.py`, `packaging/build-installer.ps1` and
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-28
+
+### Added
+
+- Settings › My documents: choose what the index reads. Include or exclude Zotero
+  collections, skip sub-folders, and skip files over a size limit (100 MB for new
+  libraries) with a "Read anyway" button per file. The options stay folded away; by
+  default the whole PDF folder is read. The first-run assistant offers the same choice.
+- Separate libraries, each with its own index: create one per subject, rename, delete or
+  switch. The main library keeps the existing index, so nothing changes until a second
+  library is created. Each library shows whether it is ready, to prepare or to rebuild.
+- Preparing the library now names its step ("Step 2 of 3") in the sidebar and the
+  first-run assistant, so a new step no longer looks like the preparation starting over.
+- Chat: an answer length setting (Auto, Concise, Standard, Detailed). Auto, the default,
+  picks a length from the question: short for a definition or a value, longer for "why",
+  "how" or "compare". Lists give every relevant item as a bullet with its citation, and
+  the best passages are read together with the passages just before and after them.
+- Chat: Options › Filter by paper limits the next answers in the current conversation to
+  one paper, found by title, author or year.
+- Chat: a "Notebook" button limits questions to the PDFs of a notebook. Sources without a
+  PDF (text added by hand) stay out of the chat.
+
+### Changed
+
+- Settings: the performance profile (Automatic, Normal, Light) is now in "Appearance and
+  language", below the panel sizes, instead of being hidden in the debug diagnostics.
+
+### Fixed
+
+- Library: an index choice that cannot be applied no longer rewrites the index. A Zotero
+  collection renamed or moved is followed, an unreachable documents folder (an unplugged
+  drive) pauses the reload instead of emptying the index, and switching library waits
+  for a running answer or literature review.
+- Chat: a long formula between dollars that uses `\left( … \right)` is rendered instead of
+  showing as raw LaTeX.
+- Notebook chat: each suggested question (disagreements, main ideas, open questions) has
+  its own instruction and reacts to a click, and the chat reads the start of each PDF then
+  its conclusion or the passage closest to the question, not only its first 1,200
+  characters.
+- Discovery: "Add to a notebook" can now create a notebook, named after the search. Only
+  library papers with their PDF enter a notebook (matched by DOI, then title); the others
+  are listed with a link to the publisher.
+- Notebooks: each source says what the chat reads (the whole library PDF, or text added
+  by hand), with "Read here" and "Library" for PDFs.
+- Chat: "list the methods used in the papers" gets a normal answer instead of the list of
+  papers.
+
+- Chat: inline math is rendered right in mixed text. Single symbols such as `$n$` lose
+  their dollars, prose in parentheses ("(for example 28 or 31)") stays text, and a
+  formula already in dollars inside parentheses is no longer wrapped twice.
+- Chat: when a cited PDF page draws symbols (a µ, an exponent) as tiny pictures that no
+  text extractor can read, the answer now names those pages and asks to check the units
+  on the PDF. Several IEEE papers from 2005-2011 are affected; no reindex is needed.
+- Citation graphs: crowded papers can be told apart and selected again. The mouse wheel
+  (or the new − / 100 % / + buttons) zooms by spreading the graph over a larger canvas
+  while dots and labels keep their size, so stacked papers move apart and more titles
+  show; dragging the background moves around. A click where dots still touch lists the
+  papers at that spot to pick one, and Enter in the graph's search box selects the next
+  match and brings it into view.
+
 ## [0.9.0] - 2026-10-26
 
 ### Added
@@ -486,7 +546,8 @@ First public release.
   horizontal strip: it is a vertical list again. History collapsed around 1100 px: its two
   buttons no longer overflow the bar.
 
-[Unreleased]: https://github.com/bibliOwl/bibliobrain/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/bibliOwl/bibliobrain/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/bibliOwl/bibliobrain/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/bibliOwl/bibliobrain/compare/v0.8.2...v0.8.3

@@ -132,6 +132,7 @@ def api_set_app_settings(req: AppSettingsRequest):
         vision_model=req.vision_model,
         visual_description_model=req.visual_description_model,
         visual_analysis_auto_chat=req.visual_analysis_auto_chat,
+        chat_answer_length=req.chat_answer_length,
         ui_language=req.ui_language,
         update_check_enabled=req.update_check_enabled,
     )

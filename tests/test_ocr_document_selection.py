@@ -17,7 +17,7 @@ def job(monkeypatch, tmp_path):
     # The orchestration only needs these metadata helpers. Keep heavyweight
     # embedding imports out of these file-selection/cache regression tests.
     dependencies: dict[str, dict[str, object]] = {
-        "state": {"_zotero_library": {}},
+        "state": {"_zotero_library": {}, "_state_lock": threading.Lock()},
         "document_loader": {"_article_id_from_item": lambda rel, item: rel},
         "zotero_integration": {"_build_item_metadata": lambda rel, full, item: {}},
     }

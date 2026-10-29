@@ -23,16 +23,18 @@ def test_performance_mode_is_applied_before_stylesheets() -> None:
     assert "prefers-reduced-motion: reduce" in BOOT_JS
 
 
-def test_performance_control_is_hidden_in_debug_expert_diagnostics() -> None:
-    advanced_start = INDEX.index('id="settings-pane-expert-diagnostics"')
-    advanced_end = INDEX.index('<div id="kg-modal-overlay"')
-    control_position = INDEX.index('id="performance-mode-select"')
-    assert advanced_start < control_position < advanced_end
-    nearby_markup = INDEX[control_position - 800 : control_position]
-    assert 'data-debug-only="grid"' in nearby_markup
-    assert '<option value="auto"' in INDEX
-    assert '<option value="normal"' in INDEX
-    assert '<option value="light"' in INDEX
+def test_performance_control_is_below_panel_sizes_in_look_settings() -> None:
+    look_start = INDEX.index('id="settings-pane-look"')
+    look_end = INDEX.index('id="settings-pane-expert-generation"', look_start)
+    look_markup = INDEX[look_start:look_end]
+    assert look_markup.index('id="layout-reset-btn"') < look_markup.index(
+        'id="performance-mode-select"'
+    )
+    assert 'data-debug-only' not in look_markup
+    assert INDEX.count('id="performance-mode-select"') == 1
+    assert '<option value="auto"' in look_markup
+    assert '<option value="normal"' in look_markup
+    assert '<option value="light"' in look_markup
 
 
 def test_performance_preference_is_local_and_reacts_to_system_changes() -> None:

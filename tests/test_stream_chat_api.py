@@ -145,7 +145,7 @@ def test_stream_chat_api_yields_error_when_init_fails(
     """If init_rag fails, the generator must yield a single error event and stop."""
     qe = query_engine_module
 
-    def _fake_init(model_name, threshold, force_reload=False):
+    def _fake_init(model_name, threshold, force_reload=False, **_kwargs):
         return False, "boom: vectorstore unavailable"
 
     monkeypatch.setattr(qe, "init_rag", _fake_init)
@@ -331,7 +331,7 @@ def test_stream_chat_api_init_lock_serializes_concurrent_calls(
 
     call_count = {"n": 0}
 
-    def _fake_init(model_name, threshold, force_reload=False):
+    def _fake_init(model_name, threshold, force_reload=False, **_kwargs):
         call_count["n"] += 1
         with state._state_lock:
             state.document_chain = object()
@@ -527,6 +527,8 @@ def test_stream_chat_api_gives_one_passage_per_selected_article(
         state.vectorstore = object()
     monkeypatch.setattr(state, "_max_chunks_default", 6)
     monkeypatch.setattr(state, "_CHAT_MAX_CHUNKS_CAP", 8)
+    # Auto would read a comparison as detailed, which asks for more passages.
+    monkeypatch.setattr(qe, "_chat_answer_length", lambda: "standard")
 
     captured: dict[str, Any] = {}
 
@@ -599,3 +601,140 @@ def test_zotero_metadata_stores_full_author_filter_key() -> None:
 
     assert metadata["zotero_authors"] == "Grilli, Rossi, Garcia et al."
     assert metadata["zotero_authors_lc"] == "grilli | rossi | garcia | de moreau"
+
+
+@pytest.mark.parametrize(("selected", "expected"), [(3, 6), (4, 8), (9, 12)])
+def test_summary_of_selected_articles_budgets_two_passages_each(
+    query_engine_module, monkeypatch: pytest.MonkeyPatch, selected: int, expected: int
+) -> None:
+    qe = query_engine_module
+    from src.rag import state
+
+    with state._state_lock:
+        state.document_chain = object()
+        state.vectorstore = object()
+    monkeypatch.setattr(state, "_max_chunks_default", 6)
+    monkeypatch.setattr(state, "_CHAT_MAX_CHUNKS_CAP", 8)
+    # Auto reads "résume" as a detailed answer, which takes more passages on
+    # its own; a fixed length isolates the per-article budget.
+    monkeypatch.setattr(qe, "_chat_answer_length", lambda: "standard")
+    captured: dict[str, Any] = {}
+
+    def _fake_retrieve(query, threshold, max_chunks, filters, **kwargs):
+        captured["max_chunks"] = max_chunks
+        return []
+
+    monkeypatch.setattr(qe, "_retrieve_documents", _fake_retrieve)
+    _drain(
+        qe.stream_chat_api(
+            message="résume moi ces pdf",
+            model_name="dummy-model",
+            threshold=0.3,
+            source_paths=[f"P{i}/Paper.pdf" for i in range(selected)],
+        )
+    )
+
+    assert captured["max_chunks"] == expected
+
+
+def test_summary_of_selected_articles_covers_every_article(query_engine_module) -> None:
+    # A notebook of three PDFs: "résume moi ces pdf" took four of six passages
+    # from one review and the answer summarized that review alone.
+    qe = query_engine_module
+    from src.rag import state
+
+    prose = "This paper studies superconducting tapes and reports measured losses. " * 6
+
+    class FilteredStore:
+        def similarity_search_with_relevance_scores(self, query, k, filter):
+            path = filter["rel_path"].replace("\\", "/")
+            return [
+                (
+                    qe.Document(
+                        page_content=f"{path} passage {index}. {prose}",
+                        metadata={"rel_path": path, "source": path, "page": index},
+                    ),
+                    0.9 - index / 10,
+                )
+                for index in range(4 if path == "A/review.pdf" else 2)
+            ]
+
+    with state._state_lock:
+        state.vectorstore = FilteredStore()
+
+    paths = ["A/review.pdf", "B/motor.pdf", "C/tape.pdf"]
+    docs = qe._retrieve_documents(
+        "résume moi ces pdf", 0.3, 6, {"sources": paths}, use_reranker=False
+    )
+
+    sources = [doc.metadata["rel_path"] for doc in docs]
+    assert sources[:3] == paths
+    assert sorted(sources) == sorted(paths * 2)
+
+
+def test_selected_articles_are_the_subject_not_a_filter_to_enforce(query_engine_module) -> None:
+    qe = query_engine_module
+    docs = [
+        qe.Document(page_content="Content.", metadata={"source": "a.pdf", "rel_path": "a.pdf"})
+    ]
+
+    messages = qe.build_chat_messages(
+        "résume moi ces pdf",
+        docs,
+        docs,
+        filter_summary=qe._filter_summary(
+            {"tags": [], "collections": [], "authors": [], "years": [], "dois": [],
+             "sources": ["a.pdf", "b.pdf"]},
+            include_sources=False,
+        ),
+        selected_articles=2,
+    )
+
+    prompt = messages[-1]["content"]
+    assert "Filtres Zotero" not in prompt
+    assert "aucune n'est hors sujet ni hors filtre" in prompt or "none of them is off-topic" in prompt
+    assert "par article" in prompt or "per article" in prompt
+
+
+@pytest.mark.parametrize(
+    ("setting", "message", "think", "resolved", "cap"),
+    [
+        ("auto", "Quelle est la formule chimique des REBCO ?", False, "concise", 450),
+        ("auto", "Quelle est la formule chimique des REBCO ?", True, "concise", None),
+        ("auto", "Liste les formules des REBCO", False, "concise", None),
+        ("concise", "Liste les thèmes de ma bibliothèque", False, "concise", None),
+        ("standard", "Quelle est la formule chimique des REBCO ?", False, "standard", None),
+    ],
+)
+def test_stream_chat_api_reports_answer_length_and_caps_concise_prose(
+    query_engine_module,
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    message: str,
+    think: bool,
+    resolved: str,
+    cap: int | None,
+) -> None:
+    qe = query_engine_module
+    _prepare_streaming_rag(qe, monkeypatch, guarded_text="Answer [S1].")
+    monkeypatch.setattr(qe, "is_ollama_provider", lambda: True)
+    monkeypatch.setattr(qe, "is_remote_provider", lambda: False)
+    monkeypatch.setattr(qe, "resolve_chat_think_mode", lambda *args, **kwargs: think)
+    monkeypatch.setattr(qe, "_chat_answer_length", lambda: setting)
+    monkeypatch.setattr(qe, "_chat_context_options", lambda *args, **kwargs: {"num_ctx": 8192})
+    captured: dict[str, Any] = {}
+
+    def _fake_stream(*args: Any, **kwargs: Any):
+        captured["options"] = kwargs.get("options_override")
+        yield {"thinking": "", "content": "Answer [S1]."}
+
+    monkeypatch.setattr(qe, "stream_ollama_chat", _fake_stream)
+
+    events = _drain(qe.stream_chat_api(message=message, model_name="m", threshold=0.0))
+
+    length_event = next(event for event in events if event.get("type") == "answer_length")
+    assert length_event["data"]["setting"] == setting
+    assert length_event["data"]["resolved"] == resolved
+    assert length_event["data"]["num_predict"] == cap
+    assert captured["options"]["num_ctx"] == 8192
+    assert captured["options"].get("num_predict") == cap

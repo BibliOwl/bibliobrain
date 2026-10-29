@@ -42,6 +42,32 @@ function renderRagRefreshControls() {
   });
   const notice = document.getElementById('rag-refresh-notice');
   if (notice) notice.hidden = !needsRefresh;
+  _renderIndexSelectionPending(needsRefresh);
+}
+
+// Settings > My documents: a ticked box is saved at once but the answers keep
+// using the index until the next reload. Say so where the boxes are.
+function _renderIndexSelectionPending(needsRefresh) {
+  const box = document.getElementById('index-selection-pending');
+  const text = document.getElementById('index-selection-pending-text');
+  if (!box || !text) return;
+  const preview = _ragRefreshPreview;
+  // A library still to prepare already says so, with its own button.
+  const notPrepared = document.getElementById('library-profile-status')?.hidden === false;
+  box.hidden = !needsRefresh || !preview || notPrepared;
+  if (box.hidden) return;
+  if (preview.full_rebuild_required) {
+    text.textContent = _ti('indexSelection.pendingRebuild');
+    return;
+  }
+  const parts = [];
+  const added = Number(preview.new_count) || 0;
+  const modified = Number(preview.modified_count) || 0;
+  const removed = Number(preview.removed_count) || 0;
+  if (added) parts.push(_ti('indexSelection.pendingAdd', { n: formatCount(added) }));
+  if (modified) parts.push(_ti('indexSelection.pendingUpdate', { n: formatCount(modified) }));
+  if (removed) parts.push(_ti('indexSelection.pendingRemove', { n: formatCount(removed) }));
+  text.textContent = `${_ti('indexSelection.pending')} ${parts.join(' · ')}`;
 }
 
 // PDFs added, changed or removed since the last load, as the pill's text and
@@ -195,7 +221,30 @@ const _ragLoadContext = {
   revealTimer: null,
   startedAt: 0,
   plan: null,
+  // Highest fraction shown during this load: the bar never moves back.
+  maxFrac: 0,
 };
+
+// "Step 2 of 3: reading the documents · <server detail>". The server tags each
+// progress event with its step (src/rag/progress_stages.py), so a step that
+// starts lower than the previous one is announced instead of looking like a
+// restart.
+function _ragStageLine(stage, count, key) {
+  if (!stage || !count) return '';
+  return _ti('rag.stageLine', { stage, count, label: _ti(`rag.stage.${key || 'check'}`) });
+}
+
+function _ragStagedDesc(event) {
+  const line = _ragStageLine(event?.stage, event?.stage_count, event?.stage_key);
+  const detail = String(event?.desc || '').trim();
+  return line && detail ? `${line} · ${detail}` : (line || detail);
+}
+
+function _ragClampFrac(frac) {
+  const value = Math.max(0, Math.min(1, Number(frac) || 0));
+  _ragLoadContext.maxFrac = Math.max(_ragLoadContext.maxFrac, value);
+  return _ragLoadContext.maxFrac;
+}
 
 // ---- RAG section of the sidebar status card (renderSidebarStatus in app.js) ----
 // What the load is doing, for how long, and which documents it covers.
@@ -397,8 +446,11 @@ async function initRAG(forceReload, options = {}) {
   const activityLabel = forceReload ? 'Rechargement du RAG' : 'Préparation du RAG';
   ragStatusSet('preparing', busyLabel);
   progressWrap.style.display = 'block';
-  progressBar.style.width = '4%';
-  const initDesc = forceReload ? _tr('Préparation du rechargement…') : _tr('Préparation de l\'initialisation…');
+  _ragLoadContext.maxFrac = 0;
+  state.ragLastProgressEvent = null;
+  progressBar.style.width = `${(_ragClampFrac(0.04) * 100).toFixed(1)}%`;
+  const firstStep = _ragStageLine(1, 3, 'check');
+  const initDesc = `${firstStep} · ${forceReload ? _tr('Préparation du rechargement…') : _tr('Préparation de l\'initialisation…')}`;
   _ragLoadContext.busyLabel = busyLabel;
   _ragLoadContext.activityLabel = activityLabel;
   _ragLoadContext.lastDesc = initDesc;
@@ -411,8 +463,8 @@ async function initRAG(forceReload, options = {}) {
 
   try {
     await syncOllamaBaseUrl({ silent: true });
-    progressBar.style.width = '8%';
-    const checkDesc = _tr('Vérification de la connexion au provider…');
+    progressBar.style.width = `${(_ragClampFrac(0.08) * 100).toFixed(1)}%`;
+    const checkDesc = `${firstStep} · ${_tr('Vérification de la connexion au provider…')}`;
     progressDesc.textContent = checkDesc;
     ragStatusProgress(null, checkDesc);
 
@@ -428,8 +480,8 @@ async function initRAG(forceReload, options = {}) {
     }
 
     if (forceReload && !options.skipReloadPreview) {
-      progressBar.style.width = '10%';
-      const previewDesc = _tr('Analyse des changements PDF/Zotero…');
+      progressBar.style.width = `${(_ragClampFrac(0.10) * 100).toFixed(1)}%`;
+      const previewDesc = `${firstStep} · ${_tr('Analyse des changements PDF/Zotero…')}`;
       progressDesc.textContent = previewDesc;
       ragStatusProgress(null, previewDesc);
       const preview = await previewRagReload();
@@ -481,7 +533,13 @@ async function initRAG(forceReload, options = {}) {
     }
     for await (const event of readSSE(response)) {
       if (event.type === 'progress') {
-        progressBar.style.width = (event.frac * 100).toFixed(1) + '%';
+        const frac = _ragClampFrac(event.frac);
+        // Each parsed event is a fresh object: shown values replace raw ones.
+        event.raw_desc = event.desc;
+        event.desc = _ragStagedDesc(event);
+        event.frac = frac;
+        state.ragLastProgressEvent = event;
+        progressBar.style.width = (frac * 100).toFixed(1) + '%';
         _ragLoadContext.lastDesc = event.desc;
         if (!_ragLoadContext.streaming) {
           _ragLoadContext.streaming = true;

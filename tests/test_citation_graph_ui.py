@@ -167,9 +167,21 @@ def test_citation_graph_layout_rules_and_interaction_contracts() -> None:
     # Labels and ticks are HTML over the SVG, not SVG <text>.
     assert "<text" not in graph_js
     assert "new ResizeObserver(" in graph_js
-    # No zoom or pan any more.
-    for removed in ("function _nbCgZoom", "function _nbCgFitView", "wheel", "_nbCgApplyYearFilter"):
+    # The old magnifying zoom stays gone: zooming now lays the graph out on a
+    # larger canvas (see test_citation_graph_zoom_spreads_crowded_nodes).
+    for removed in ("function _nbCgZoom(", "function _nbCgFitView", "_nbCgApplyYearFilter"):
         assert removed not in graph_js, removed
+    assert "_nbCgLayoutBands(model, w, h, _nbCg.zoom)" in graph_js
+    assert "addEventListener('wheel'" in graph_js
+    assert "{ passive: false }" in graph_js
+    # Dots that still touch open a list to choose from; Escape closes it first.
+    stage_click = graph_js[graph_js.index("stage.addEventListener('click'") :]
+    assert "_nbCgNodesAt(_nbCgStagePoint(event))" in stage_click
+    assert "_nbCgOpenPicker(hits" in stage_click
+    escape_handler = _extract_js_function(graph_js, "_nbCgEscapeKeyHandler")
+    assert escape_handler.index("_nbCgClosePicker(") < escape_handler.index("_nbCgSelectNode('')")
+    # Enter in the search box goes to the next match.
+    assert "_nbCgSearchNext(event.shiftKey ? -1 : 1)" in graph_js
     # Motion respects the light performance mode and reduced motion, and only
     # restarts when the targets change.
     assert "isLightPerformanceMode()" in graph_js
@@ -373,3 +385,72 @@ console.log(JSON.stringify(out));
     assert payload["surnames"] == ["Zhou", "Li", "Bean", "Kim", "Bean", "NARIKI"]
     assert payload["allAxisStart"] <= 1950
     assert payload["sharedLabel"].endswith(" · 2×")
+
+
+def test_citation_graph_zoom_spreads_crowded_nodes() -> None:
+    payload = _run_graph_script(
+        """
+const work = (id, year, cited = 10) => ({ id, openalex_id: id, year, cited_by_count: cited, title: id, authors: [`A ${id}`] });
+const ids = Array.from({ length: 20 }, (_, i) => `C${i}`);
+_nbCg.data = {
+  nodes: ids.map((id, i) => work(id, 2014 + (i % 4))),
+  edges: [],
+  // Many references packed into a few years: they cannot all fit at 100 %.
+  prior_works: Array.from({ length: 160 }, (_, i) => ({ ...work(`R${i}`, 2008 + (i % 6)), cited_by_notebook_ids: ids.filter((_, k) => (i + k) % 4 === 0) })),
+  derivative_works: Array.from({ length: 120 }, (_, i) => ({ ...work(`D${i}`, 2018 + (i % 7)), cites_notebook_ids: ids.filter((_, k) => (i + k) % 5 === 0) })),
+};
+_nbCg.showAll = { refs: true, cits: true };
+const model = _nbCgBuildModel();
+const overlaps = (layout) => {
+  const list = [...layout.targets.values()];
+  let n = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    for (let j = i + 1; j < list.length; j += 1) {
+      const a = list[i]; const b = list[j];
+      if (Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r) n += 1;
+    }
+  }
+  return n;
+};
+const hidden = layout => [...layout.targets.values()].filter(t => !t.showLabel && !t.source).length;
+const one = _nbCgLayoutBands(model, 1000, 640, 1);
+const three = _nbCgLayoutBands(model, 1000, 640, 3);
+const sameRadii = [...one.targets].every(([id, t]) => three.targets.get(id).r === t.r);
+_nbCg.showAll = { refs: false, cits: false };
+const cappedOne = _nbCgLayoutBands(model, 1000, 640, 1);
+const cappedThree = _nbCgLayoutBands(model, 1000, 640, 3);
+
+_nbCg.data = { nodes: [work('S', 2015, 40)], edges: [],
+  prior_works: Array.from({ length: 150 }, (_, i) => ({ ...work(`R${i}`, 2009 + (i % 6)), cited_by_notebook_ids: ['S'] })),
+  derivative_works: [] };
+const single = _nbCgBuildModel();
+const s1 = _nbCgLayoutSingle(single, 1000, 640, 1);
+const s3 = _nbCgLayoutSingle(single, 1000, 640, 3);
+
+console.log(JSON.stringify({
+  size: [three.W / one.W, three.H / one.H],
+  sameRadii,
+  overlapsOne: overlaps(one),
+  overlapsThree: overlaps(three),
+  hiddenOne: hidden(one),
+  hiddenThree: hidden(three),
+  sameCap: cappedOne.targets.size === cappedThree.targets.size,
+  singleOverlaps: [overlaps(s1), overlaps(s3)],
+  singleRadii: [...s1.targets].every(([id, t]) => s3.targets.get(id).r === t.r),
+  singleTicks: [s1.ticks.length, s3.ticks.length],
+}));
+"""
+    )
+
+    # The canvas grows, dots keep their size: crowded dots move apart and
+    # more labels find room.
+    assert payload["size"] == [3, 3]
+    assert payload["sameRadii"] is True
+    assert payload["overlapsOne"] > 0
+    assert payload["overlapsThree"] < payload["overlapsOne"] / 4
+    assert payload["hiddenThree"] < payload["hiddenOne"]
+    # Zooming in never brings in works hidden by the "show all" cap.
+    assert payload["sameCap"] is True
+    assert payload["singleOverlaps"][1] < payload["singleOverlaps"][0]
+    assert payload["singleRadii"] is True
+    assert payload["singleTicks"][1] > payload["singleTicks"][0]

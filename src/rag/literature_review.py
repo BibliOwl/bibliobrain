@@ -910,7 +910,7 @@ def stream_literature_review(
         with state._state_lock:
             needs_init = state.document_chain is None or state.vectorstore is None
         if needs_init:
-            ok, msg = init_rag(model_name, threshold, force_reload=False)
+            ok, msg = init_rag(model_name, threshold, force_reload=False, build_missing=False)
             if not ok:
                 yield {"type": "error", "msg": msg}
                 return

@@ -16,7 +16,7 @@ from src.llm_provider import (
 )
 
 _DEFAULT_THRESHOLD = 0.30
-_DEFAULT_MAX_CHUNKS = 6
+_DEFAULT_MAX_CHUNKS = 8
 _DEFAULT_THINKING = False
 _DEFAULT_ALLOW_EXTERNAL_API_REQUESTS = False
 _DEFAULT_RESEARCH_SCOPE_ENABLED = True
@@ -49,6 +49,8 @@ _DEFAULT_VISUAL_ANALYSIS_MODE = "off"
 _DEFAULT_VISION_MODEL = ""
 _DEFAULT_VISUAL_DESCRIPTION_MODEL = ""
 _DEFAULT_VISUAL_ANALYSIS_AUTO_CHAT = False
+_DEFAULT_CHAT_ANSWER_LENGTH = "auto"
+_SUPPORTED_CHAT_ANSWER_LENGTHS = {"auto", "concise", "standard", "detailed"}
 _SUPPORTED_VISUAL_ANALYSIS_MODES = {"off", "on_demand", "index"}
 _SUPPORTED_METADATA_SOURCES = {"none", "bibtex", "zotero"}
 _SUPPORTED_UI_LANGUAGES = {"fr", "en"}
@@ -156,6 +158,11 @@ def _normalize_ui_language(value: Any, default: str = "") -> str:
 def _normalize_visual_analysis_mode(value: Any, default: str = "off") -> str:
     mode = str(value if value is not None else default).strip().lower()
     return mode if mode in _SUPPORTED_VISUAL_ANALYSIS_MODES else _DEFAULT_VISUAL_ANALYSIS_MODE
+
+
+def _normalize_chat_answer_length(value: Any, default: str = _DEFAULT_CHAT_ANSWER_LENGTH) -> str:
+    length = str(value if value is not None else default).strip().lower()
+    return length if length in _SUPPORTED_CHAT_ANSWER_LENGTHS else _DEFAULT_CHAT_ANSWER_LENGTH
 
 
 def _normalize_onboarding_progress(value: Any, *, legacy_tour_done: bool = False) -> dict[str, Any]:
@@ -326,6 +333,7 @@ def get_app_settings() -> dict[str, Any]:
             payload.get("visual_analysis_auto_chat"),
             _DEFAULT_VISUAL_ANALYSIS_AUTO_CHAT,
         ),
+        "chat_answer_length": _normalize_chat_answer_length(payload.get("chat_answer_length")),
         "ui_language": _normalize_ui_language(payload.get("ui_language"), ""),
         # None = not asked yet: src/update_check.py sends nothing until True.
         "update_check_enabled": _normalize_optional_bool(payload.get("update_check_enabled")),
@@ -366,6 +374,7 @@ def set_app_settings(
     vision_model: Any | None = None,
     visual_description_model: Any | None = None,
     visual_analysis_auto_chat: Any | None = None,
+    chat_answer_length: Any | None = None,
     ui_language: Any | None = None,
     update_check_enabled: Any | None = None,
     temperature: Any | None = None,
@@ -512,6 +521,8 @@ def set_app_settings(
             visual_analysis_auto_chat,
             _DEFAULT_VISUAL_ANALYSIS_AUTO_CHAT,
         )
+    if chat_answer_length is not None:
+        payload["chat_answer_length"] = _normalize_chat_answer_length(chat_answer_length)
     if ui_language is not None:
         payload["ui_language"] = _normalize_ui_language(ui_language, "")
     if update_check_enabled is not None:

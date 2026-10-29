@@ -647,6 +647,7 @@
   background: var(--surface);
 }
 #chat-sources-panel[hidden] { display: none; }
+#chat-sources-backdrop { display: none; }
 .csp-head {
   display: flex;
   align-items: center;
@@ -818,14 +819,21 @@
 .csp-row-title { color: var(--accent-text-strong); font-size: 13.5px; font-weight: 600; line-height: 1.35; }
 .csp-row-meta { color: var(--text-2); font-size: 12px; }
 
-/* Narrow windows: the panel slides over the conversation instead of
-   squeezing it; on phones it takes the whole width. */
+/* Narrow windows: the panel slides over the conversation. Keep a strip of
+   the backdrop visible even on phones so it can always be tapped to close. */
 @media (max-width: 1180px) {
+  #chat-layout.has-sources-panel #chat-sources-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    background: rgba(0,0,0,0.2);
+  }
   #chat-sources-panel {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 30;
-    width: min(420px, 100%);
+    width: min(420px, calc(100% - 32px));
     box-shadow: var(--shadow-3);
   }
 }
@@ -1123,7 +1131,105 @@
 .composer-menu-empty { margin: 0; padding: 7px 10px; color: var(--muted); font-size: 12.6px; }
 .composer-menu-separator { height: 1px; margin: 4px 2px; background: var(--border); }
 
-/* Options menu: suggestions, Zotero filters, figure reading */
+/* Article search: same heading style as "Suggestions", a rounded field with
+   a search icon, and results in a bordered list. */
+.chat-article-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+}
+.chat-article-search label {
+  padding: 2px 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.chat-article-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.chat-article-search-field svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.chat-article-search-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px 7px 30px;
+  border: 1px solid var(--glass-3);
+  border-radius: 8px;
+  background: var(--glass-0);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.chat-article-search-field input::placeholder { color: var(--muted); }
+.chat-article-search-field input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+#chat-article-search-status { margin: 0; padding: 0 4px; color: var(--muted); font-size: 11.5px; }
+#chat-article-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 220px;
+  padding: 3px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--glass-0);
+  scrollbar-width: thin;
+}
+#chat-article-search-results[hidden],
+#chat-article-search-results:empty { display: none; }
+.chat-article-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-article-search-result:hover { background: var(--glass-2); }
+.chat-article-search-result:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; background: var(--glass-2); }
+.chat-article-search-result strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12.4px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.chat-article-search-result span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-article-search-result mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* Options menu: suggestions, article search, Zotero filters, figure reading */
 .composer-options-menu {
   gap: 8px;
   width: min(480px, calc(100vw - 48px));

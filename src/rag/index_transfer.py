@@ -40,6 +40,7 @@ from typing import Any
 from src import config, zotero_drops
 from src.app_settings import get_app_settings, index_standalone_pdfs_enabled
 from src.document_formats import document_index_variant
+from src.index_selection import apply_index_selection
 from src.llm_provider import (
     current_embedding_profile_label,
     get_embedding_provider_mode,
@@ -1147,11 +1148,14 @@ def analyze_documents(
     new_local = 0
     if data_path_exists and data_path == current_folder:
         # Same candidate list as the reload: trashed Zotero attachments are skipped.
-        local_documents = filter_active_zotero_pdf_entries(
-            state.find_documents(),
+        local_documents, _skipped = apply_index_selection(
+            filter_active_zotero_pdf_entries(
+                state.find_documents(),
+                library,
+                data_path=data_path,
+                zotero_db_path=config.ZOTERO_DB_PATH,
+            ),
             library,
-            data_path=data_path,
-            zotero_db_path=config.ZOTERO_DB_PATH,
         )
         for rel_path, _full_path in local_documents:
             if not {candidate.lower() for candidate in candidate_rel_paths(rel_path)} & indexed:

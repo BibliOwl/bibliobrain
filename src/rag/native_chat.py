@@ -420,7 +420,7 @@ def ensure_rag_ready(model_name: str, threshold: float) -> None:
         with state._state_lock:
             needs_init = state.document_chain is None or state.vectorstore is None
         if needs_init:
-            ok, msg = init_rag(model_name, threshold, force_reload=False)
+            ok, msg = init_rag(model_name, threshold, force_reload=False, build_missing=False)
             if not ok:
                 raise RuntimeError(msg)
 

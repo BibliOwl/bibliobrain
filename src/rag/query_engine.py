@@ -29,8 +29,11 @@ from src.analysis_quality import deep_analysis_guidance, is_deep_article_analysi
 from src.app_settings import get_app_settings
 from src.chat_grounding import check_answer_grounding
 from src.chat_intents import (
+    classify_answer_length,
+    is_enumeration_request,
     is_library_overview_request,
     is_multi_paper_comparison_request,
+    is_selection_summary_request,
     question_may_need_visuals,
     refers_to_previous_answer,
 )
@@ -63,6 +66,7 @@ from src.llm_provider import (
 )
 from src.model_profiles import get_chat_response_note
 from src.native_runtime import native_library_message
+from src.pdf_inline_symbols import page_has_image_symbols
 from src.prompts import SYSTEM_PROMPT
 from src.rag.citation_anchors import extract_citation_anchors
 from src.rag.reranker import (
@@ -482,8 +486,10 @@ def _prepare_explicit_filters(
     }
 
 
-def _filter_summary(filters: dict[str, list[str]]) -> str:
+def _filter_summary(filters: dict[str, list[str]], *, include_sources: bool = True) -> str:
     parts: list[str] = []
+    if not filters:
+        return ""
     if filters["tags"]:
         parts.append(f"tags={', '.join(filters['tags'])}")
     if filters["collections"]:
@@ -494,7 +500,7 @@ def _filter_summary(filters: dict[str, list[str]]) -> str:
         parts.append(f"years={', '.join(filters['years'])}")
     if filters["dois"]:
         parts.append(f"doi={', '.join(filters['dois'])}")
-    if filters.get("sources"):
+    if include_sources and filters.get("sources"):
         labels = [Path(value).name or value for value in filters["sources"]]
         parts.append(f"article={', '.join(labels)}")
     return " | ".join(parts)
@@ -1702,6 +1708,57 @@ def _library_overview_documents(max_chunks: int) -> list[Document]:
     return docs
 
 
+def _selection_summary_documents(source_paths: list[str], max_chunks: int) -> list[Document]:
+    """Passages from every selected article, for "résume-moi ces PDF".
+
+    The words of such a request match nothing in the papers: with a notebook
+    of PDFs selected, the similarity search took four of six passages from one
+    review, and the model summarized that review alone. Each article gives its
+    best prose passages (abstract, introduction), taken in turns so every
+    article is covered before any gives a second one.
+    """
+    started = time.perf_counter()
+    per_article: list[list[Document]] = []
+    for path in source_paths:
+        title = Path(path).stem.replace("_", " ")
+        scored = _collect_source_scored_docs(
+            f"{title} abstract introduction conclusion", k=8, source_paths=[path]
+        )
+        passages: list[Document] = []
+        seen_texts: set[str] = set()
+        for doc, _score in sorted(scored, key=lambda item: item[1], reverse=True):
+            text = str(doc.page_content or "").strip()
+            if len(text) < _OVERVIEW_MIN_PASSAGE_CHARS:
+                continue
+            if _OVERVIEW_NON_PROSE_RE.search(text[:400].lower()):
+                continue
+            text_key = _content_key(_sanitize_document(doc))
+            if text_key and text_key in seen_texts:
+                continue
+            seen_texts.add(text_key)
+            passages.append(doc)
+        if passages:
+            per_article.append(passages)
+    docs: list[Document] = []
+    depth = 0
+    while len(docs) < max_chunks and any(depth < len(passages) for passages in per_article):
+        for passages in per_article:
+            if depth < len(passages) and len(docs) < max_chunks:
+                docs.append(passages[depth])
+        depth += 1
+    _record_pipeline_metric(
+        "retrieval",
+        {
+            "duration_ms": _duration_ms(started),
+            "selection_summary": True,
+            "selected_articles": len(source_paths),
+            "articles_with_passages": len(per_article),
+            "returned": len(docs),
+        },
+    )
+    return docs
+
+
 def _retrieve_documents(
     query: str,
     threshold: float,
@@ -1729,6 +1786,11 @@ def _retrieve_documents(
             _retrieve_documents_single(query, threshold, max_chunks, filters, **single)
         )[:max_chunks]
 
+    selected_paths = list((filters or {}).get("sources") or [])
+    if len(selected_paths) > 1 and is_selection_summary_request(query):
+        docs = _selection_summary_documents(selected_paths, max_chunks)
+        if docs:
+            return docs
     if is_library_overview_request(query):
         # Tags, collections or chosen articles narrow the library: the theme
         # tree covers all of it, so those questions keep the search.
@@ -2569,6 +2631,16 @@ _L10N: dict[str, dict[str, str]] = {
         "fr": "*Termes à vérifier, absents des passages retrouvés : {terms}.*",
         "en": "*Terms to check, not found in the retrieved passages: {terms}.*",
     },
+    "image_symbols_to_check": {
+        "fr": (
+            "*Attention : dans {pages}, certains symboles (µ, exposants, signes) sont "
+            "dessinés en images et manquent dans le texte lu. Vérifiez les unités sur le PDF.*"
+        ),
+        "en": (
+            "*Caution: in {pages}, some symbols (µ, exponents, signs) are drawn as "
+            "pictures and missing from the text read. Check the units in the PDF.*"
+        ),
+    },
     "terms_repairing": {
         "fr": "Termes absents des sources détectés, correction en cours...",
         "en": "Terms missing from the sources detected, correcting...",
@@ -2796,6 +2868,41 @@ def _localized_no_results_message(*, source_scoped: bool = False) -> str:
     )
 
 
+def _selected_articles_task(message: str, selected_articles: int) -> str:
+    """The articles the user chose are the subject, not a filter to enforce.
+
+    Listed as "Filtres Zotero a respecter strictement: article=<file names>",
+    the selection of a notebook's PDFs made granite4.2 drop two of its three
+    papers as "hors du filtre" when asked to summarize them.
+    """
+    if selected_articles <= 0:
+        return ""
+    summary = selected_articles > 1 and is_selection_summary_request(message)
+    if _current_ui_language() == "en":
+        lines = [
+            f"Every source below comes from the {selected_articles} article(s) the user chose for this question; "
+            "none of them is off-topic or outside a filter. \"These papers\", \"these PDFs\" or "
+            "\"these documents\" mean this selection."
+        ]
+        if summary:
+            lines.append(
+                "Summarize each article separately, one paragraph per article starting with its title, "
+                "without leaving any out; then, if useful, add one sentence on what links them."
+            )
+    else:
+        lines = [
+            f"Toutes les sources ci-dessous viennent des {selected_articles} article(s) choisi(s) par "
+            "l'utilisateur pour cette question ; aucune n'est hors sujet ni hors filtre. \"Ces articles\", "
+            "\"ces PDF\" ou \"ces documents\" designent cette selection."
+        ]
+        if summary:
+            lines.append(
+                "Resume chaque article separement, un paragraphe par article commencant par son titre, "
+                "sans en ecarter aucun ; puis, si c'est utile, ajoute une phrase sur ce qui les relie."
+            )
+    return "\n".join(lines)
+
+
 def _library_overview_task(message: str, docs: list[Document]) -> str:
     """What a library-overview answer must do, outside the style guide.
 
@@ -2807,7 +2914,8 @@ def _library_overview_task(message: str, docs: list[Document]) -> str:
     theme_groups = any((doc.metadata or {}).get("library_theme_note") for doc in docs)
     if _current_ui_language() == "en":
         lines = [
-            "Library-overview task: infer 2 to 4 recurring research themes across the retrieved excerpts.",
+            "Library-overview task: infer every distinct recurring research theme that the retrieved "
+            "excerpts support, without stopping at 3 or 4 themes.",
             "Name each theme and briefly connect the representative sources that support it.",
         ]
         if theme_groups:
@@ -2822,7 +2930,8 @@ def _library_overview_task(message: str, docs: list[Document]) -> str:
         ]
     else:
         lines = [
-            "Tache de vue d'ensemble de la bibliotheque: deduis 2 a 4 themes de recherche recurrents dans les extraits recuperes.",
+            "Tache de vue d'ensemble de la bibliotheque: deduis tous les themes de recherche distincts "
+            "que soutiennent les extraits recuperes, sans t'arreter a 3 ou 4 themes.",
             "Nomme chaque theme et relie brievement les sources representatives qui le soutiennent.",
         ]
         if theme_groups:
@@ -2851,37 +2960,219 @@ _TERMS_RULE_FR = (
 )
 
 
-def _build_response_style_guide(message: str, model_name: str | None = None) -> str:
+_CHAT_ANSWER_LENGTHS = ("concise", "standard", "detailed")
+# "auto" picks one of the three from the question (chat_intents).
+_CHAT_ANSWER_LENGTH_SETTINGS = ("auto", *_CHAT_ANSWER_LENGTHS)
+# A concise prose answer stops there; lists and longer lengths are not capped.
+_CONCISE_MAX_OUTPUT_TOKENS = 450
+
+
+def _chat_answer_length() -> str:
+    """The answer length chosen in the settings: auto, concise, standard or detailed."""
+    try:
+        value = str(get_app_settings().get("chat_answer_length") or "").strip().lower()
+    except Exception:
+        _logger.debug("Recovered from an error in _chat_answer_length.", exc_info=True)
+        value = ""
+    return value if value in _CHAT_ANSWER_LENGTH_SETTINGS else "auto"
+
+
+def resolve_answer_length(message: str, setting: str | None = None) -> str:
+    """The length an answer gets: the setting, or the question's under "auto"."""
+    if setting not in _CHAT_ANSWER_LENGTH_SETTINGS:
+        setting = _chat_answer_length()
+    if setting in _CHAT_ANSWER_LENGTHS:
+        return setting
+    return classify_answer_length(message)
+
+
+def _answer_output_token_cap(message: str, length: str) -> int | None:
+    """num_predict for the answer: only a concise answer in prose is capped."""
+    if length != "concise" or is_enumeration_request(message):
+        return None
+    if is_deep_article_analysis_request(message) or is_library_overview_request(message):
+        return None
+    return _CONCISE_MAX_OUTPUT_TOKENS
+
+
+# Passages the detailed length asks for at least, like a deep analysis.
+_DETAILED_MIN_CHUNKS = 10
+# The best passages get the passages around them in their paper, so the model
+# reads a result with its method and conditions instead of a cut sentence.
+_NEIGHBOR_EXPANDED_DOCS = {"concise": 0, "standard": 2, "detailed": 3}
+
+
+def _answer_length_lines(length: str, *, wants_list: bool, english: bool) -> list[str]:
+    """How long the answer should be, for prose and for a requested list.
+
+    A list is never capped in items: the length only sets how much each item
+    says, so a model does not stop at three methods when the sources give six.
+    """
+    if wants_list:
+        if english:
+            depth = {
+                "concise": "one short sentence per item",
+                "standard": "one or two sentences per item",
+                "detailed": "two or three sentences per item, with the methods, figures "
+                "and conditions the sources give",
+            }[length]
+            return [
+                "List every relevant item found in the sources, each with its citation [Sx]; "
+                "do not stop at 3 or 4 items and set no maximum number.",
+                "Write it as a bulleted list, one bullet per item, after one introductory sentence.",
+                f"Depth: {depth}.",
+                "Leave out an item the sources do not support.",
+            ]
+        depth = {
+            "concise": "une phrase courte par element",
+            "standard": "une ou deux phrases par element",
+            "detailed": "deux ou trois phrases par element, avec les methodes, chiffres "
+            "et conditions rapportes par les sources",
+        }[length]
+        return [
+            "Liste chaque element pertinent trouve dans les sources, chacun avec sa citation [Sx]; "
+            "ne t'arrete pas a 3 ou 4 elements et ne fixe aucun nombre maximal.",
+            "Presente-les en liste a puces, une puce par element, apres une phrase d'introduction.",
+            f"Profondeur: {depth}.",
+            "Omets un element que les sources ne soutiennent pas.",
+        ]
+    if length == "concise":
+        if english:
+            return [
+                "Give a concise answer: 1 or 2 short paragraphs (a few sentences), "
+                "with no bullet points unless the question asks for them."
+            ]
+        return [
+            "Fais une reponse concise: 1 ou 2 courts paragraphes (quelques phrases), "
+            "sans liste a puces sauf si la question en demande une."
+        ]
+    if length == "detailed":
+        if english:
+            return [
+                "Give a detailed answer: for each point, report the methods, figures, "
+                "conditions and limits stated in the sources, each with its citation.",
+                "Write 4 to 7 paragraphs when the sources allow it.",
+                "Stay within the sources: a detail they do not give is left out, not guessed.",
+            ]
+        return [
+            "Fais une reponse detaillee: pour chaque point, donne les methodes, chiffres, "
+            "conditions et limites rapportes par les sources, chacun avec sa citation.",
+            "Ecris 4 a 7 paragraphes quand les sources le permettent.",
+            "Reste dans les sources: un detail qu'elles ne donnent pas est omis, pas devine.",
+        ]
+    if english:
+        return [
+            "Develop the answer in 2 to 4 paragraphs: explain each useful point "
+            "(method, result, figures, conditions) with its citation, without filler.",
+            "If the sources say little, keep the answer short rather than padding it.",
+        ]
+    return [
+        "Developpe la reponse en 2 a 4 paragraphes: explique chaque point utile "
+        "(methode, resultat, chiffres, conditions) avec sa citation, sans remplissage.",
+        "Si les sources en disent peu, reste court plutot que de delayer.",
+    ]
+
+
+def _answer_length_block(message: str, length: str) -> str:
+    """The length rules, kept apart from the style guide.
+
+    llm_provider cuts the style guide from qwen3.5 prompts with thinking off;
+    this block sits before it, so the length reaches every model.
+    """
+    if is_deep_article_analysis_request(message):
+        return ""
+    if length not in _CHAT_ANSWER_LENGTHS:
+        length = "standard"
+    english = _current_ui_language() == "en"
+    header = "Answer length:" if english else "Longueur de la reponse:"
+    lines = _answer_length_lines(
+        length, wants_list=is_enumeration_request(message), english=english
+    )
+    return "\n".join([header, *lines])
+
+
+def _join_overlapping(left: str, right: str, *, max_overlap: int = 400) -> str:
+    """``left`` then ``right``, without the text the splitter repeated in both."""
+    left = left.rstrip()
+    right = right.lstrip()
+    for size in range(min(len(left), len(right), max_overlap), 19, -1):
+        if left.endswith(right[:size]):
+            return left + right[size:]
+    return f"{left}\n{right}"
+
+
+def _neighbor_passages(vectorstore: Any, metadata: dict[str, Any]) -> tuple[str, str]:
+    """The passages just before and after a passage in its paper ("" if none)."""
+    rel_path = str(metadata.get("rel_path") or "").strip()
+    try:
+        chunk_id = int(metadata["chunk_id"])
+    except (KeyError, TypeError, ValueError):
+        return "", ""
+    if not rel_path or metadata.get("content_type") == "wiki_page":
+        return "", ""
+    payload = vectorstore.get(
+        where={"$and": [{"rel_path": rel_path}, {"chunk_id": {"$in": [chunk_id - 1, chunk_id + 1]}}]},
+        include=["documents", "metadatas"],
+    )
+    content_type = metadata.get("content_type")
+    before = after = ""
+    documents = list(payload.get("documents") or [])
+    for index, raw in enumerate(payload.get("metadatas") or []):
+        neighbor = dict(raw or {})
+        # Notes and PDF text number their chunks from 0 each.
+        if neighbor.get("content_type") != content_type:
+            continue
+        text = str(documents[index] if index < len(documents) else "").strip()
+        if neighbor.get("chunk_id") == chunk_id - 1:
+            before = text
+        elif neighbor.get("chunk_id") == chunk_id + 1:
+            after = text
+    return before, after
+
+
+def _expand_with_neighbor_passages(docs: list[Document], count: int) -> list[Document]:
+    """The ``count`` best passages, each read with the passages around it.
+
+    Same passages, same order and same labels: only the text the model reads
+    grows. A passage that is itself among the results is not repeated.
+    """
+    if count <= 0 or not docs:
+        return docs
+    with state._state_lock:
+        vectorstore = state.vectorstore
+    if vectorstore is None or not hasattr(vectorstore, "get"):
+        return docs
+    present = {_content_key(doc) for doc in docs}
+    expanded = list(docs)
+    for index, doc in enumerate(docs[:count]):
+        metadata = doc.metadata or {}
+        if metadata.get("library_theme_note"):
+            continue
+        try:
+            before, after = _neighbor_passages(vectorstore, metadata)
+        except Exception:
+            _logger.debug("Neighbor passages unavailable", exc_info=True)
+            continue
+        text = str(doc.page_content or "")
+        if before and _content_key(Document(page_content=before)) not in present:
+            text = _join_overlapping(before, text)
+        if after and _content_key(Document(page_content=after)) not in present:
+            text = _join_overlapping(text, after)
+        if text != doc.page_content:
+            expanded[index] = Document(
+                page_content=text,
+                metadata={**metadata, "neighbor_expanded": True},
+            )
+    return expanded
+
+
+def _build_response_style_guide(
+    message: str,
+    model_name: str | None = None,
+) -> str:
     normalized = _normalize_text(message)
     deep_analysis = is_deep_article_analysis_request(message)
-    wants_list = any(
-        marker in normalized
-        for marker in (
-            "liste",
-            "list ",
-            "bullet",
-            "puces",
-            "tableau",
-            "table",
-            "compare",
-            "comparaison",
-            "etapes",
-            "steps",
-            # Grouping or ranking the papers of a previous answer.
-            "classe",
-            "classer",
-            "classify",
-            "regroupe",
-            "group",
-            "categor",
-            "theme",
-            "thème",
-            "sujets",
-            "topics",
-            "trie",
-            "sort ",
-        )
-    )
+    wants_list = is_enumeration_request(message)
     broad_question = any(
         marker in normalized
         for marker in (
@@ -2901,7 +3192,9 @@ def _build_response_style_guide(message: str, model_name: str | None = None) -> 
         lines = [
             "Response style rules:",
             _response_language_instruction(),
-            "Answer the question directly in natural prose.",
+            "Answer the question directly, as the requested list."
+            if wants_list
+            else "Answer the question directly in natural prose.",
             "Do not invent anything: if the sources are insufficient, say so clearly.",
             "Every claim based on retrieved sources must carry a valid inline citation [Sx].",
             "Do not produce a simple list of sources or peripheral facts.",
@@ -2913,7 +3206,9 @@ def _build_response_style_guide(message: str, model_name: str | None = None) -> 
         lines = [
             "Style de reponse a respecter:",
             _response_language_instruction(),
-            "Reponds directement a la question en texte naturel.",
+            "Reponds directement a la question, sous la forme de la liste demandee."
+            if wants_list
+            else "Reponds directement a la question en texte naturel.",
             "N'invente rien: si les sources ne permettent pas de conclure, dis-le clairement.",
             "Chaque affirmation issue des sources doit porter une citation inline valide [Sx].",
             "Ne fais pas une simple liste de sources ou de faits periferiques.",
@@ -2928,12 +3223,7 @@ def _build_response_style_guide(message: str, model_name: str | None = None) -> 
                 citation_format="[Sx]",
             )
         )
-    elif not wants_list:
-        if _current_ui_language() == "en":
-            lines.append("By default, prefer 1 or 2 short paragraphs over bullet points.")
-        else:
-            lines.append("Par defaut, prefere 1 ou 2 courts paragraphes a une liste a puces.")
-    if broad_question:
+    if broad_question and not wants_list:
         if _current_ui_language() == "en":
             lines.append(
                 "If the question is broad, synthesize the 2 to 4 most important ideas before details."
@@ -3156,6 +3446,8 @@ def build_chat_messages(
     filter_summary: str = "",
     model_name: str | None = None,
     context_note: str = "",
+    answer_length: str | None = None,
+    selected_articles: int = 0,
 ) -> list[dict[str, str]]:
     """The system and user messages of a sourced chat answer.
 
@@ -3179,11 +3471,17 @@ def build_chat_messages(
     overview_task = _library_overview_task(question, retrieved_docs)
     if overview_task:
         prompt_input += f"\n\n{overview_task}"
+    selection_task = _selected_articles_task(question, selected_articles)
+    if selection_task:
+        prompt_input += f"\n\n{selection_task}"
     if filter_summary:
         prompt_input += (
             "\n\nFiltres Zotero a respecter strictement: "
             f"{filter_summary}. Si un element est hors filtre, ignore-le."
         )
+    length_block = _answer_length_block(question, resolve_answer_length(question, answer_length))
+    if length_block:
+        prompt_input += f"\n\n{length_block}"
     response_style_guide = _build_response_style_guide(question, model_name=model_name)
     if response_style_guide:
         prompt_input += f"\n\n{response_style_guide}"
@@ -3627,14 +3925,41 @@ def _repair_ungrounded_terms(
     return report.normalized_text
 
 
+NOT_PREPARED_MESSAGE = (
+    "Cette bibliothèque n'est pas encore préparée pour le modèle d'embedding actuel. "
+    "Lancez sa préparation dans Réglages > Mes documents, puis posez votre question."
+)
+
+
+def _documents_folder_reachable() -> bool:
+    return os.path.isdir(str(config.DATA_PATH))
+
+
+def _index_selection_problem() -> dict[str, str] | None:
+    """Why the active library's choice cannot be applied now (src/index_selection.py)."""
+    from src.index_selection import selection_problem
+
+    with state._state_lock:
+        library = dict(state._zotero_library)
+    return selection_problem(None, library)
+
+
 def init_rag(
     model_name: str,
     threshold: float,
     force_reload: bool,
     progress: state.ProgressFn | None = None,
-    max_chunks: int = 6,
+    max_chunks: int = 8,
     chunk_size: int | None = None,
+    *,
+    build_missing: bool = True,
 ) -> tuple[bool, str]:
+    """Load the active index, or build it when it is missing.
+
+    ``build_missing=False`` is for a chat or a review that only needs the index
+    loaded: a library that was never prepared is not built behind a question.
+    The main library keeps building on demand, as before library profiles.
+    """
     if progress is None:
         progress = state._noop_progress
 
@@ -3674,6 +3999,11 @@ def init_rag(
     )
     db_path = str(current_profile.get("path") or "")
     db_exists = bool(db_path) and os.path.exists(db_path) and bool(os.listdir(db_path))
+    if not build_missing and not force_reload and not db_exists:
+        from src.library_profiles import DEFAULT_PROFILE_ID, active_profile_id
+
+        if active_profile_id() != DEFAULT_PROFILE_ID:
+            return False, NOT_PREPARED_MESSAGE
     # An index keeps the task prompts its passages were embedded with (none
     # before they existed); only a build from scratch takes the model's own.
     raw_embeddings = embeddings
@@ -3713,9 +4043,26 @@ def init_rag(
                 # including changes made during the short library scan cache.
                 state.clear_document_scan_cache()
             _refresh_zotero_library_cache()
+            problem = _index_selection_problem()
+            if problem:
+                return False, problem["msg"]
             pdf_list = _filter_active_zotero_pdf_entries(state.find_pdfs())
             if not pdf_list and not (force_reload and db_exists):
                 return False, "Aucun document pris en charge a indexer dans ./data."
+            if (
+                not pdf_list
+                and force_reload
+                and not _documents_folder_reachable()
+                and _load_manifest_entries(db_path=db_path)
+            ):
+                # An unplugged drive or an offline share reads as an empty
+                # folder: a reload would remove every document of the index.
+                return (
+                    False,
+                    "Aucun document trouvé dans le dossier de documents : le rechargement "
+                    "est suspendu pour ne pas vider l'index. Vérifiez que le dossier "
+                    "est accessible (disque branché, synchronisation terminée).",
+                )
 
         if force_reload and db_exists:
             previous_entries = _load_manifest_entries(db_path=db_path)
@@ -4282,7 +4629,7 @@ def stream_chat_api(
             needs_init = state.document_chain is None or state.vectorstore is None
         if needs_init:
             init_ran = True
-            ok, msg = init_rag(model_name, threshold, force_reload=False)
+            ok, msg = init_rag(model_name, threshold, force_reload=False, build_missing=False)
             if not ok:
                 yield {"type": "error", "msg": msg}
                 return
@@ -4297,11 +4644,23 @@ def stream_chat_api(
             effective_max_chunks,
             min(10, state._CHAT_MAX_CHUNKS_CAP),
         )
-    selected_articles = len(_dedupe_keep_order(_csv_to_list(source_paths)))
-    if selected_articles > 1:
+    answer_length_setting = _chat_answer_length()
+    answer_length = resolve_answer_length(message, answer_length_setting)
+    answer_token_cap = _answer_output_token_cap(message, answer_length)
+    if answer_length == "detailed":
         effective_max_chunks = max(
             effective_max_chunks,
-            min(selected_articles, _MULTI_ARTICLE_MAX_CHUNKS),
+            min(_DETAILED_MIN_CHUNKS, state._CHAT_MAX_CHUNKS_CAP),
+        )
+    # A list should cite every item: it reads as many passages as the chat allows.
+    if is_enumeration_request(message):
+        effective_max_chunks = max(effective_max_chunks, state._CHAT_MAX_CHUNKS_CAP)
+    selected_articles = len(_dedupe_keep_order(_csv_to_list(source_paths)))
+    if selected_articles > 1:
+        per_article = 2 if is_selection_summary_request(message) else 1
+        effective_max_chunks = max(
+            effective_max_chunks,
+            min(selected_articles * per_article, _MULTI_ARTICLE_MAX_CHUNKS),
         )
 
     historical_reference = _resolve_historical_bibliographic_reference(
@@ -4387,37 +4746,64 @@ def stream_chat_api(
 
     yield {"type": "status", "msg": _t("sources_found_generating")}
 
+    # The model reads the best passages with their neighbors; the source cards
+    # and the PDF anchors keep the passage that was found.
+    prompt_docs = citation_docs
+    if previous_answer is None:
+        prompt_docs = _expand_with_neighbor_passages(
+            citation_docs, _NEIGHBOR_EXPANDED_DOCS.get(answer_length, 0)
+        )
+
     answer_text = ""
     chat_messages = build_chat_messages(
         cleaned_message,
-        retrieved_docs,
+        prompt_docs,
         citation_docs,
         history_context=history_context,
-        filter_summary=summary,
+        filter_summary=_filter_summary(filters, include_sources=False),
         model_name=model_name,
         context_note=context_note,
+        answer_length=answer_length,
+        selected_articles=len((filters or {}).get("sources") or []),
     )
 
     streamed_display_text = ""
     streamed_answer_text = ""
     thinking_display_text = ""
     generation_timings: dict[str, Any] = {}
+    use_direct_ollama_chat = is_ollama_provider()
+    think_mode = (
+        resolve_chat_think_mode(model_name, thinking_enabled) if use_direct_ollama_chat else None
+    )
+    # Thinking tokens count in num_predict: a cap would cut the reasoning.
+    if not use_direct_ollama_chat or think_mode not in (None, False, ""):
+        answer_token_cap = None
+    yield {
+        "type": "answer_length",
+        "data": {
+            "setting": answer_length_setting,
+            "resolved": answer_length,
+            "list": is_enumeration_request(message),
+            "num_predict": answer_token_cap,
+        },
+    }
     try:
         generation_started = time.perf_counter()
-        use_direct_ollama_chat = is_ollama_provider()
         if use_direct_ollama_chat:
             opened_thinking = False
-            think_mode = resolve_chat_think_mode(model_name, thinking_enabled)
             show_thinking = bool(thinking_enabled and think_mode not in (None, False, ""))
             raw_content = ""
+            generation_options = _chat_context_options(
+                model_name, *(entry["content"] for entry in chat_messages)
+            )
+            if answer_token_cap:
+                generation_options = {**(generation_options or {}), "num_predict": answer_token_cap}
             for chunk in stream_ollama_chat(
                 model_name,
                 chat_messages,
                 think=think_mode,
                 abort_signal=abort_signal,
-                options_override=_chat_context_options(
-                    model_name, *(entry["content"] for entry in chat_messages)
-                ),
+                options_override=generation_options,
             ):
                 if chunk.get("timings"):
                     generation_timings = dict(chunk["timings"])
@@ -4516,7 +4902,7 @@ def stream_chat_api(
     guard_report = validate_chat_output(
         answer_text,
         sources=citation_docs,
-        context_text=_format_context_for_direct_chat(citation_docs),
+        context_text=_format_context_for_direct_chat(prompt_docs),
         require_structure=False,
     )
     answer_text = strip_invalid_citations(guard_report.normalized_text, sources=citation_docs)
@@ -4524,7 +4910,7 @@ def stream_chat_api(
         guard_report = validate_chat_output(
             answer_text,
             sources=citation_docs,
-            context_text=_format_context_for_direct_chat(citation_docs),
+            context_text=_format_context_for_direct_chat(prompt_docs),
             require_structure=False,
         )
     if guard_report.severity == "error":
@@ -4533,7 +4919,7 @@ def stream_chat_api(
             model_name=model_name,
             user_query=cleaned_message,
             answer_text=answer_text,
-            source_docs=citation_docs,
+            source_docs=prompt_docs,
             guard_report=guard_report,
         )
         if repaired_ok:
@@ -4543,7 +4929,8 @@ def stream_chat_api(
                 "type": "status",
                 "msg": _t("repair_impossible_fallback", reason=repair_reason),
             }
-    passages_for_check = grounding_passages(citation_docs)
+    # The extended passages (with their neighbours) are what the model read.
+    passages_for_check = grounding_passages(prompt_docs)
     missing_terms = ungrounded_terms(
         answer_text,
         passages_for_check,
@@ -4600,6 +4987,11 @@ def stream_chat_api(
     cited_docs = _filter_citation_docs_by_answer(answer_text, citation_docs)
     if not cited_docs:
         cited_docs = citation_docs
+    symbol_pages = _pages_with_image_symbols(cited_docs)
+    if symbol_pages:
+        answer_text = (
+            f"{answer_text.rstrip()}\n\n{_t('image_symbols_to_check', pages=symbol_pages)}"
+        )
     with state._state_lock:
         state.last_sources = cited_docs
     final_display_text = f"{thinking_display_text}{answer_text}"
@@ -4618,6 +5010,48 @@ def stream_chat_api(
     anchor_event = _build_anchor_event(answer_text, cited_docs)
     if anchor_event:
         yield anchor_event
+
+
+_MAX_SYMBOL_PAGES_NAMED = 3
+
+
+def _pages_with_image_symbols(docs: list[Any]) -> str:
+    """Name the cited PDF pages that draw symbols as images ("" when none).
+
+    The text of such a page lost those symbols at extraction ("1 µV/cm" read
+    as "1 V/cm"), so a unit in the answer may be wrong by a large factor.
+    """
+    named: list[str] = []
+    seen: set[tuple[str, int]] = set()
+    for doc in docs:
+        metadata = getattr(doc, "metadata", None) or {}
+        if metadata.get("content_type", "pdf_page") != "pdf_page":
+            continue
+        rel_path = str(metadata.get("rel_path") or "").strip()
+        if not rel_path.lower().endswith(".pdf"):
+            continue
+        raw_page = metadata.get("page")
+        if raw_page is None:
+            continue
+        try:
+            page_index = int(raw_page)
+        except (TypeError, ValueError):
+            continue
+        if not rel_path or (rel_path, page_index) in seen:
+            continue
+        seen.add((rel_path, page_index))
+        full_path = resolve_pdf_path(config.DATA_PATH, rel_path)
+        if full_path is None or not page_has_image_symbols(full_path, page_index):
+            continue
+        title = str(
+            metadata.get("zotero_title") or metadata.get("title") or os.path.basename(rel_path)
+        ).strip()
+        if len(title) > 60:
+            title = title[:57].rstrip() + "..."
+        named.append(f"« {title} », p. {page_index + 1}")
+        if len(named) >= _MAX_SYMBOL_PAGES_NAMED:
+            break
+    return " ; ".join(named)
 
 
 def chat(

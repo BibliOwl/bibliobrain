@@ -306,7 +306,7 @@ def test_vector_search_settings_can_restore_recommended_defaults() -> None:
     assert 'id="research-settings-reset-btn"' in research
     assert "const RESEARCH_RECOMMENDED_DEFAULTS" in SETTINGS_JS
     assert "threshold: 0.3" in SETTINGS_JS
-    assert "maxChunks: 6" in SETTINGS_JS
+    assert "maxChunks: 8" in SETTINGS_JS
     assert "rerankerEnabled: true" in SETTINGS_JS
     assert "rerankerProfile: 'auto'" in SETTINGS_JS
     assert "rerankerTranslateFrench: true" in SETTINGS_JS
@@ -546,3 +546,28 @@ def test_api_keys_are_managed_as_masked_server_side_credentials() -> None:
     assert "body: JSON.stringify(payload)" in credentials_js
     assert "input.value = '';" in credentials_js
     assert "localStorage.setItem" not in credentials_js
+
+
+def test_answer_length_resets_to_the_backend_default() -> None:
+    # A QA report: the row's Reset restored "Standard" after the default became Auto.
+    import re
+
+    from src.app_settings import _DEFAULT_CHAT_ANSWER_LENGTH
+
+    panel_js = (ROOT / "static" / "js" / "app" / "settings-panel.js").read_text(encoding="utf-8")
+    research = re.search(
+        r"const RESEARCH_RECOMMENDED_DEFAULTS = Object\.freeze\(\{(.*?)\}\);", SETTINGS_JS, re.S
+    )
+    assert research
+    js_default = re.search(r"chatAnswerLength:\s*'([a-z]+)'", research.group(1))
+    assert js_default and js_default.group(1) == _DEFAULT_CHAT_ANSWER_LENGTH
+    expert = panel_js[panel_js.index("function settingsExpertDefaults()") :]
+    expert = expert[: expert.index("\n}\n")]
+    assert "'chat-answer-length': research.chatAnswerLength," in expert
+    # The section reset and its "defaults active" summary cover the length too.
+    assert "values.chatAnswerLength" in SETTINGS_JS
+    assert "value('chat-answer-length') === research.chatAnswerLength" in panel_js
+    select = HTML[HTML.index('id="chat-answer-length"') : HTML.index("</select>", HTML.index('id="chat-answer-length"'))]
+    assert re.search(rf'<option value="{_DEFAULT_CHAT_ANSWER_LENGTH}"[^>]*\bselected\b', select)
+    leftovers = re.findall(r"chat[-_]answer[-_]length[^\n]*'standard'", SETTINGS_JS + panel_js + APP_JS)
+    assert leftovers == []

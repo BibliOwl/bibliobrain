@@ -82,16 +82,79 @@ def _truncate_block(text: str, limit: int) -> str:
     return value[: max(0, limit - 1)].rstrip() + "…"
 
 
+_NB_CONCLUSION_RE = re.compile(
+    r"(?im)^\s*(?:\d+(?:\.\d+)*\.?\s*|[ivx]+\.\s*)?"
+    r"(?:conclusions?|concluding remarks|summary and conclusions?|discussion and conclusions?"
+    r"|discussion|perspectives?|limitations?|outlook|future work)\b"
+)
+_NB_QUESTION_WORD_RE = re.compile(r"[^\W\d_]{5,}", re.UNICODE)
+_NB_GENERIC_QUESTION_WORDS = frozenset(
+    "sources source articles article papers paper documents document quelles quels "
+    "questions question these those which what about where there their entre elles "
+    "laissent leave ouvertes principales principal ideas idees desaccord disagree "
+    "sont-elles leurs cette celles".split()
+)
+
+
+def _question_terms(message: str) -> set[str]:
+    words = {word.lower() for word in _NB_QUESTION_WORD_RE.findall(str(message or ""))}
+    return {word for word in words if word not in _NB_GENERIC_QUESTION_WORDS}
+
+
+def _source_excerpt(text: str, limit: int, message: str = "") -> str:
+    """The part of a long source the model sees, within ``limit`` characters.
+
+    The notebook chat used to send the first 1200 characters of each PDF: the
+    title page and the start of the abstract. "Sur quoi ces sources sont-elles
+    en désaccord ?" was then answered from front matter only. A long text now
+    gives its start (abstract, introduction), then the passage closest to the
+    question, or else its conclusion or discussion.
+    """
+    value = str(text or "").strip()
+    if limit <= 0 or len(" ".join(value.split())) <= limit:
+        return _truncate_block(value, limit)
+    head_limit = max(200, int(limit * 0.55))
+    tail_limit = limit - head_limit - 3
+    head = _truncate_block(value[: head_limit * 2], head_limit)
+    body = value[head_limit:]
+    window = max(400, tail_limit * 2)
+    best_start = -1
+    terms = _question_terms(message)
+    if terms:
+        best_score = 0
+        step = max(200, window // 2)
+        for start in range(0, max(1, len(body) - window // 2), step):
+            chunk = body[start : start + window].lower()
+            score = sum(chunk.count(term) for term in terms)
+            if score > best_score:
+                best_score, best_start = score, start
+        if best_start >= 0:
+            # Start just before the first matching word: the excerpt keeps
+            # only the beginning of the window.
+            chunk = body[best_start : best_start + window].lower()
+            first = min(chunk.find(term) for term in terms if term in chunk)
+            best_start += max(0, first - 150)
+    if best_start < 0:
+        match = _NB_CONCLUSION_RE.search(body)
+        best_start = match.start() if match else max(0, len(body) - window)
+    tail = _truncate_block(body[best_start : best_start + window], tail_limit)
+    return f"{head}\n[…]\n{tail}" if tail else head
+
+
 def _fit_source_snippets(
     sources: list[dict],
     *,
     per_source_limit: int,
     total_limit: int,
+    message: str = "",
 ) -> list[str]:
     snippets: list[str] = []
     used = 0
     for idx, source in enumerate(sources, start=1):
         title = str(source.get("title") or "Source sans titre").strip()
+        if not str(source.get("source_path") or "").strip():
+            # Text typed or pasted by hand: no full paper behind it.
+            title += " (texte ajoute a la main, sans PDF)"
         text_content = str(source.get("content") or "").strip()
         visual_content = str(source.get("visual_content") or "").strip()
         if text_content and visual_content:
@@ -99,7 +162,7 @@ def _fit_source_snippets(
             available = max(0, per_source_limit - section_overhead)
             visual_limit = min(len(visual_content), max(320, available // 2))
             text_limit = max(0, available - visual_limit)
-            text_excerpt = _truncate_block(text_content, text_limit) if text_limit else ""
+            text_excerpt = _source_excerpt(text_content, text_limit, message) if text_limit else ""
             visual_excerpt = _truncate_block(visual_content, visual_limit)
             content = (
                 f"[Texte extrait]\n{text_excerpt}\n\n"
@@ -108,7 +171,7 @@ def _fit_source_snippets(
         elif visual_content:
             content = f"[Figures analysées]\n{_truncate_block(visual_content, per_source_limit)}"
         else:
-            content = _truncate_block(text_content, per_source_limit)
+            content = _source_excerpt(text_content, per_source_limit, message)
         if not content:
             continue
         snippet = f"[{idx}] {title}\n{content}"
@@ -200,6 +263,44 @@ def _append_chat_answer_to_notes(nb_id: str, user_message: str, assistant_answer
     return combined
 
 
+_NB_DISAGREEMENT_RE = re.compile(
+    r"desaccord|désaccord|disagree|contradi|divergent sur|divergences? entre|s.opposent|debat|débat"
+)
+_NB_OPEN_QUESTIONS_RE = re.compile(
+    r"questions? ouvertes?|laissent.{0,20}ouvert|leave open|open questions?|lacunes?|research gaps?"
+)
+_NB_MAIN_IDEAS_RE = re.compile(r"idees? principales?|idées? principales?|main ideas?|key ideas?|messages? cles?")
+
+
+def _notebook_comparison_task(message: str) -> str:
+    """What the three suggested questions of an empty notebook chat must produce.
+
+    Asked "What do these sources disagree on?", granite4.2 answered only that no
+    source states a disagreement: across several papers the useful answer is
+    how their methods, assumptions and results differ.
+    """
+    text = str(message or "").lower()
+    if _NB_DISAGREEMENT_RE.search(text):
+        return (
+            "Compare les sources entre elles : objectifs, methodes, hypotheses, perimetre et resultats. "
+            "S'il n'y a pas de desaccord explicite, dis-le en une phrase, puis decris les differences "
+            "concretes d'approche ou de resultats et les points ou elles pourraient se contredire, "
+            "en citant chaque source avec [x]. Ne conclus pas seulement qu'aucun desaccord n'est ecrit."
+        )
+    if _NB_OPEN_QUESTIONS_RE.search(text):
+        return (
+            "Releve les limites, questions ouvertes et perspectives que chaque source mentionne, avec [x], "
+            "puis celles qui ressortent de leur comparaison (ce qu'aucune ne traite). Distingue clairement "
+            "ce que disent les sources de ce que tu en deduis."
+        )
+    if _NB_MAIN_IDEAS_RE.search(text):
+        return (
+            "Donne l'idee principale de chaque source en une ou deux phrases avec [x], "
+            "puis ce qui les relie ou les distingue."
+        )
+    return ""
+
+
 def _notebook_response_style_guide(message: str, model_name: str | None = None) -> str:
     text = " ".join(str(message or "").strip().lower().split())
     deep_analysis = _is_deep_article_analysis_request(message)
@@ -242,7 +343,10 @@ def _notebook_response_style_guide(message: str, model_name: str | None = None) 
         lines.append(deep_analysis_guidance(language="fr", citation_format="[x]"))
     elif detailed_summary:
         lines.append(detailed_summary_guidance(language="fr", citation_format="[x]"))
-    elif not wants_list:
+    comparison_task = _notebook_comparison_task(message)
+    if comparison_task:
+        lines.append(comparison_task)
+    elif not wants_list and not deep_analysis and not detailed_summary:
         lines.append("Prefere 1 ou 2 courts paragraphes a une liste a puces.")
     model_note = str(get_chat_response_note(model_name) or "").strip()
     if model_note:
@@ -839,6 +943,7 @@ def stream_notebook_chat(
             sources,
             per_source_limit=source_limit,
             total_limit=total_context_limit,
+            message=message,
         )
     sources_context = "\n\n".join(indexed_sources) if indexed_sources else ""
     notes = _truncate_block(
@@ -896,6 +1001,8 @@ def stream_notebook_chat(
             + citation_rules
             + "N'ajoute pas de section finale 'References'. "
             "Indique clairement si une information ne s'y trouve pas. "
+            "Une source marquee 'texte ajoute a la main, sans PDF' se limite a ce texte : "
+            "ne lui prete pas de details absents de ce texte et signale-le si la question en demande. "
             "Si la question est simple, reponds en une ou deux phrases maximum. "
             + response_style_guide
         )

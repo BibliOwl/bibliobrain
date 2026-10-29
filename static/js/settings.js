@@ -26,7 +26,9 @@ const LLM_GENERATION_RECOMMENDED_DEFAULTS = Object.freeze({
 });
 const RESEARCH_RECOMMENDED_DEFAULTS = Object.freeze({
   threshold: 0.3,
-  maxChunks: 6,
+  maxChunks: 8,
+  // Same as _DEFAULT_CHAT_ANSWER_LENGTH in src/app_settings.py.
+  chatAnswerLength: 'auto',
   rerankerEnabled: true,
   rerankerProfile: 'auto',
   rerankerTranslateFrench: true,
@@ -82,6 +84,8 @@ function _setResearchSettingsValues(values) {
     if (input && Number.isFinite(value)) input.value = String(value);
     if (pill && Number.isFinite(value)) pill.textContent = value.toFixed(digits);
   });
+  const answerLength = document.getElementById('chat-answer-length');
+  if (answerLength && values.chatAnswerLength) answerLength.value = String(values.chatAnswerLength);
   const reranker = document.getElementById('reranker-enabled');
   if (reranker && typeof values.rerankerEnabled === 'boolean') {
     reranker.checked = values.rerankerEnabled;
@@ -100,6 +104,7 @@ async function resetResearchSettings() {
   const previousValues = {
     threshold: Number(document.getElementById('threshold')?.value),
     maxChunks: Number(document.getElementById('max-chunks')?.value),
+    chatAnswerLength: String(document.getElementById('chat-answer-length')?.value || RESEARCH_RECOMMENDED_DEFAULTS.chatAnswerLength),
     rerankerEnabled: Boolean(document.getElementById('reranker-enabled')?.checked),
     rerankerProfile: String(document.getElementById('reranker-profile')?.value || 'auto'),
     rerankerTranslateFrench: Boolean(document.getElementById('reranker-translate-french')?.checked),
@@ -988,6 +993,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       successMessage: `Nombre max de chunks enregistré : ${parseInt(e.target.value || '0', 10)}`,
     });
   });
+  document.getElementById('chat-answer-length')?.addEventListener('change', (e) => {
+    syncAppSettings({
+      silent: true,
+      successMessage: `Longueur des réponses enregistrée : ${e.target.selectedOptions?.[0]?.textContent || e.target.value}`,
+    });
+  });
   document.getElementById('research-settings-reset-btn')?.addEventListener('click', resetResearchSettings);
   document.getElementById('zotero-path')?.addEventListener('change', () => {
     const path = String(document.getElementById('zotero-path')?.value || '').trim();
@@ -1802,6 +1813,7 @@ async function loadAppSettings() {
     applyValue('visual-analysis-mode', d?.visual_analysis_mode || 'off');
     applyValue('ollama-context-length', d?.ollama_context_length ?? 0);
     applyCheckbox('visual-analysis-auto-chat', d?.visual_analysis_auto_chat);
+    applyValue('chat-answer-length', d?.chat_answer_length || 'auto');
     applyCheckbox('debug-metrics', d?.debug_metrics);
     applyCheckbox('force-thinking-small-models', d?.debug_force_thinking_small_models);
     applyCheckbox('allow-external-discovery', d?.allow_external_api_requests ?? d?.allow_external_discovery);
@@ -1963,7 +1975,8 @@ async function syncAppSettings(options = {}) {
       visual_description_model: String(document.getElementById('visual-description-model-select')?.value || '').trim(),
       visual_analysis_auto_chat: Boolean(document.getElementById('visual-analysis-auto-chat')?.checked),
       threshold: parseFloat(document.getElementById('threshold')?.value || '0.3'),
-      max_chunks: parseInt(document.getElementById('max-chunks')?.value || '6', 10),
+      max_chunks: parseInt(document.getElementById('max-chunks')?.value || '8', 10),
+      chat_answer_length: String(document.getElementById('chat-answer-length')?.value || 'auto'),
       zotero_path: String(document.getElementById('zotero-path')?.value || '').trim(),
       metadata_source: state.metadataSource
         || inferMetadataSource(document.getElementById('zotero-path')?.value || ''),

@@ -9,6 +9,7 @@ from src.api import (
     drafting,
     files,
     graphs,
+    index_selection,
     index_transfer,
     library,
     lifecycle,
@@ -33,6 +34,7 @@ app.include_router(lifecycle.router)
 app.include_router(files.router)
 app.include_router(ocr.router)
 app.include_router(index_transfer.router)
+app.include_router(index_selection.router)
 app.include_router(updates.router)
 
 

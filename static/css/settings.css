@@ -2135,3 +2135,61 @@
   font-size: 0.82em;
 }
 .startup-import-note { display: block; margin-top: 4px; font-size: 0.92em; }
+
+/* What Bibliobrain reads: collections, sub-folders, size guard. */
+.index-selection-summary { display: block; font-size: 0.78em; color: var(--text-2); line-height: 1.5; }
+.index-selection-block { padding: 4px 18px 16px; display: flex; flex-direction: column; gap: 10px; }
+.index-selection-modes { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.index-selection-modes legend { padding: 0; margin-bottom: 6px; font-size: 0.79em; font-weight: 600; color: var(--text-2); }
+.index-selection-mode { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78em; color: var(--text-2); cursor: pointer; }
+.index-selection-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--glass-2);
+  border-radius: 8px;
+  padding: 6px 0;
+}
+.index-selection-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px calc(12px + var(--depth, 0) * 18px);
+  font-size: 0.78em;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.index-selection-item:hover { background: var(--glass-1); }
+.index-selection-item-name, .index-selection-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.index-selection-item-count { color: var(--muted); font-size: 0.92em; font-variant-numeric: tabular-nums; }
+.index-selection-size { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.78em; color: var(--text-2); }
+.index-selection-size input { width: 84px; }
+.index-selection-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.index-selection-files li { display: flex; align-items: center; gap: 10px; font-size: 0.78em; color: var(--text-2); }
+#library-profile-select { width: 100%; }
+.library-profile-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 0 18px 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--glass-1);
+  color: var(--text-2);
+  font-size: 0.78em;
+}
+.library-profile-status span { flex: 1; min-width: 200px; }
+.index-selection-item.is-covered { opacity: 0.6; cursor: default; }
+.index-selection-options { display: flex; flex-direction: column; gap: 4px; padding: 10px 0 6px; }
+.index-selection-options .index-selection-block + .index-selection-block { border-top: 1px solid var(--glass-2); padding-top: 12px; }
+.index-selection-heading { font-size: 0.79em; font-weight: 600; color: var(--text-2); }
+.index-selection-note { margin: 0 18px 6px; font-size: 0.76em; line-height: 1.5; color: var(--muted); }
+.index-selection-block .index-selection-note { margin: 0; }
+#library-profile-select:not([hidden]) { margin-bottom: 8px; }
+/* Same options inside the first-run assistant: no separate libraries there. */
+#startup-index-selection-slot #library-profile-row,
+#startup-index-selection-slot .index-selection-options > .index-selection-note { display: none; }
+#startup-index-selection-slot .index-selection-block { padding-left: 0; padding-right: 0; }
+#startup-index-selection-slot .index-selection-list { max-height: 200px; }
+.startup-index-selection-summary { font-weight: 600; }
+#startup-index-selection-slot [hidden] { display: none !important; }

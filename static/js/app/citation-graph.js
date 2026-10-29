@@ -8,6 +8,9 @@
  *    works) on a shared year axis.
  *  In both, a light spring simulation lets nodes be pulled and fall back to
  *  their place: a node's year and side never change.
+ *  Zooming spreads the layout over a larger canvas (the stage scrolls) while
+ *  dots and labels keep their size, so crowded nodes move apart instead of
+ *  just getting bigger. Where dots still touch, a click lists them.
  *  Labels, year ticks and the tooltip are HTML laid over the SVG.
  * ================================================================ */
 const _NB_CG_NOW = new Date().getFullYear();
@@ -27,6 +30,11 @@ const _nbCg = {
   addedIds: new Set(),
   addingIds: new Set(),
   stage: { w: 0, h: 0 },
+  zoom: 1,
+  zoomRaf: null,
+  zoomAnchor: null,
+  pan: null,
+  searchCursor: -1,
   pos: new Map(),
   drag: null,
   suppressClick: false,
@@ -375,6 +383,11 @@ function _nbCgEscapeKeyHandler(event) {
   if (document.querySelector('dialog[open]')) return;
   if (_nbCg.embedded && !modal.contains(document.activeElement)) return;
   if (event.key === 'Escape') {
+    if (_nbCgPickerOpen()) {
+      event.preventDefault();
+      _nbCgClosePicker({ restoreFocus: true });
+      return;
+    }
     if (event.target?.id === 'nb-cg-search' && event.target.value) return;
     event.preventDefault();
     if (_nbCgHasUserSelection()) {
@@ -470,8 +483,20 @@ function _nbCgResetState() {
   _nbCg.addingIds.clear();
   _nbCg.pos.clear();
   _nbCg.drag = null;
+  _nbCg.pan = null;
   _nbCg.layoutSig = '';
   _nbCg.dom = { nodes: new Map(), links: [], arcs: [] };
+  _nbCg.zoom = 1;
+  _nbCg.zoomAnchor = null;
+  if (_nbCg.zoomRaf) cancelAnimationFrame(_nbCg.zoomRaf);
+  _nbCg.zoomRaf = null;
+  _nbCg.searchCursor = -1;
+  _nbCgClosePicker();
+  const stage = document.getElementById('nb-cg-stage');
+  if (stage) {
+    stage.scrollLeft = 0;
+    stage.scrollTop = 0;
+  }
 }
 
 async function _openCitationGraphFrom(url, { emptyMsg, scope = null, notebookId = '', fetchOptions = {}, returnFocusEl = null, embedded = false } = {}) {
@@ -652,8 +677,12 @@ function _nbCgClearStage() {
   });
   _nbCgShowEmpty('');
   _nbCgUpdateTooltip();
+  _nbCgClosePicker();
+  _nbCgRenderSearchCount();
+  _nbCgRenderZoomControls();
+  _nbCgPinChrome();
   const stage = document.getElementById('nb-cg-stage');
-  stage?.classList.remove('is-single', 'is-bands', 'is-draggable', 'is-dense', 'is-dragging');
+  stage?.classList.remove('is-single', 'is-bands', 'is-draggable', 'is-dense', 'is-dragging', 'is-panning', 'is-pannable');
   const topbar = document.getElementById('nb-cg-topbar');
   if (topbar) topbar.hidden = true;
 }
@@ -845,15 +874,17 @@ function _nbCgPlacer(reserved = []) {
   };
 }
 
-function _nbCgLayoutSingle(model, stageW, stageH) {
-  const W = Math.max(stageW, 480);
-  const H = Math.max(stageH, 380);
+function _nbCgLayoutSingle(model, stageW, stageH, zoom = 1) {
+  const baseW = Math.max(stageW, 480);
+  const baseH = Math.max(stageH, 380);
+  const W = Math.round(baseW * zoom);
+  const H = Math.round(baseH * zoom);
   const source = model.corpus[0];
   const top = 92;
   const axisY = H - 40;
   const bottom = axisY - 16;
   const midY = Math.round((top + bottom) / 2);
-  const narrow = W < 760;
+  const narrow = baseW < 760;
   const padL = narrow ? 92 : 112;
   const padR = narrow ? 96 : 120;
   // The paper sits right of centre: there are usually far more references
@@ -876,7 +907,8 @@ function _nbCgLayoutSingle(model, stageW, stageH) {
     / Math.max(1, srcYear - refMin) * (leftB - leftA);
   const rightX = year => rightA + (_nbCgClamp(year || rightEnd, srcYear + 1, rightEnd) - srcYear - 1)
     / Math.max(1, rightEnd - srcYear - 1) * (rightB - rightA);
-  const compact = W < 760 || H < 520;
+  // Zooming spreads the nodes out, it does not make them bigger.
+  const compact = baseW < 760 || baseH < 520;
   const radius = node => Math.min(compact ? 11 : 16, 4 + Math.log2(Number(node.cited_by_count || 0) + 2) * (compact ? 0.8 : 1.15));
   const step = _nbCgClamp((bottom - top) / 14, 15, 23);
   const placer = _nbCgPlacer([[cx - 95, midY - 22, cx + 95, midY + 52]]);
@@ -904,26 +936,31 @@ function _nbCgLayoutSingle(model, stageW, stageH) {
   targets.set(source.id, { node: source, x: cx, y: midY, r: 16, label: '', showLabel: false, source: true });
 
   const ticks = [];
-  const leftStep = (leftB - leftA) < 260 ? 10 : 5;
+  // Years get closer ticks once zooming has spread them out.
+  const tickStep = perYear => (perYear < 22 ? 5 : perYear < 40 ? 2 : 1);
+  const leftStep = (leftB - leftA) < 260 ? 10
+    : zoom > 1 ? tickStep((leftB - leftA) / Math.max(1, srcYear - refMin)) : 5;
   for (let year = Math.ceil(refMin / leftStep) * leftStep; year < srcYear; year += leftStep) {
     ticks.push({ x: leftX(year), label: String(year) });
   }
   const rightWidth = rightB - rightA;
   if (rightEnd > srcYear + 1 && rightWidth >= 80) {
     const perYear = rightWidth / Math.max(1, rightEnd - srcYear - 1);
-    const rightStep = perYear < 22 ? 5 : perYear < 40 ? 2 : 1;
+    const rightStep = tickStep(perYear);
     for (let year = Math.ceil((srcYear + 1) / rightStep) * rightStep; year <= rightEnd; year += rightStep) {
       ticks.push({ x: rightX(year), label: String(year) });
     }
   }
   ticks.push({ x: cx, label: String(srcYear), source: true });
-  return { mode: 'single', W, H, compact, top, midY, axisY, cx, leftA, leftB, rightA, rightB, srcYear, source, targets, ticks };
+  return { mode: 'single', W, H, zoom, compact, top, midY, axisY, cx, leftA, leftB, rightA, rightB, srcYear, source, targets, ticks };
 }
 
-function _nbCgLayoutBands(model, stageW, stageH) {
-  const W = Math.max(stageW, 520);
-  const H = Math.max(stageH, 380);
-  const compact = W < 820 || H < 560;
+function _nbCgLayoutBands(model, stageW, stageH, zoom = 1) {
+  const baseW = Math.max(stageW, 520);
+  const baseH = Math.max(stageH, 380);
+  const W = Math.round(baseW * zoom);
+  const H = Math.round(baseH * zoom);
+  const compact = baseW < 820 || baseH < 560;
   const gutterW = compact ? 92 : 112;
   const xL = gutterW + 30;
   const xR = W - (compact ? 84 : 110);
@@ -943,7 +980,8 @@ function _nbCgLayoutBands(model, stageW, stageH) {
   };
 
   const step = compact ? 16 : 20;
-  const cap = h => _nbCgClamp(Math.floor((h - 16) / step) * Math.floor((xR - xL) / (compact ? 120 : 140)), 6, 40);
+  // The cap is worked out at 100 %: zooming in must not bring in more works.
+  const cap = h => _nbCgClamp(Math.floor((h / zoom - 16) / step) * Math.floor((xR - xL) / zoom / (compact ? 120 : 140)), 6, 40);
   const capRef = cap(hRef);
   const capCit = cap(hCit);
   // Undated works cannot be placed on a time axis: the panel counts them.
@@ -1004,7 +1042,9 @@ function _nbCgLayoutBands(model, stageW, stageH) {
   place(visCits, 'derivative');
 
   const ticks = [];
-  const oldStep = (xBreak - xL) < 200 ? 20 : 10;
+  const oldPerYear = (xBreak - xL) / Math.max(1, yBreak - y0);
+  const oldStep = (xBreak - xL) < 200 ? 20
+    : zoom <= 1 || oldPerYear < 26 ? 10 : oldPerYear < 50 ? 5 : oldPerYear < 90 ? 2 : 1;
   for (let year = Math.ceil(y0 / oldStep) * oldStep; year <= yBreak - 3; year += oldStep) {
     ticks.push({ x: xOf(year), label: String(year) });
   }
@@ -1015,7 +1055,7 @@ function _nbCgLayoutBands(model, stageW, stageH) {
   }
   return {
     mode: 'bands',
-    W, H, compact, gutterW, xL, xR, bandsTop, axisY, band, targets, ticks,
+    W, H, zoom, compact, gutterW, xL, xR, bandsTop, axisY, band, targets, ticks,
     shown: { refs: visRefs.length, cits: visCits.length },
     dated: { refs: datedRefs.length, cits: datedCits.length },
     more: {
@@ -1055,13 +1095,29 @@ function _nbCgRelayout() {
   if (!model) return;
   const { w, h } = _nbCg.stage;
   if (!w || !h) return; // the ResizeObserver calls back once the stage has a size
+  const previous = _nbCg.layout;
   _nbCg.layout = _nbCgIsSingle(model)
-    ? _nbCgLayoutSingle(model, w, h)
-    : _nbCgLayoutBands(model, w, h);
+    ? _nbCgLayoutSingle(model, w, h, _nbCg.zoom)
+    : _nbCgLayoutBands(model, w, h, _nbCg.zoom);
+  // On a zoom, nodes already on screen are scaled with the canvas, so the
+  // springs only show the small moves of the new layout.
+  if (previous && (previous.W !== _nbCg.layout.W || previous.H !== _nbCg.layout.H)) {
+    const sx = _nbCg.layout.W / previous.W;
+    const sy = _nbCg.layout.H / previous.H;
+    for (const p of _nbCg.pos.values()) {
+      p.x *= sx;
+      p.y *= sy;
+    }
+  }
+  _nbCgClosePicker();
   _nbCgSyncPositions();
   _nbCgRenderStage();
   _nbCgApplyFocus();
   _nbCgUpdateTooltip();
+  _nbCgApplyZoomAnchor();
+  _nbCgRenderZoomControls();
+  _nbCgPinChrome();
+  _nbCgRenderSearchCount();
 }
 
 /* ---------------- Motion ---------------- */
@@ -1262,7 +1318,13 @@ function _nbCgRenderStage() {
     ? model.internal.filter(arc => layout.targets.has(arc.a) && layout.targets.has(arc.b))
       .map(arc => ({ ...arc, aR: layout.targets.get(arc.a).r, bR: layout.targets.get(arc.b).r }))
     : [];
-  const nodesSvg = [...layout.targets].map(([id, target]) => {
+  // A zoom keeps the same nodes, links and labels: only the canvas, the grid
+  // and the axis are redrawn, which keeps the wheel smooth on large graphs.
+  const structure = [layout.mode, _nbCg.filters.internal ? 'i' : '', linkItems.length, arcItems.length,
+    ...[...layout.targets].map(([id, target]) => `${id}:${target.label}:${target.r}`)].join('|');
+  const light = _nbCg.dom.structure === structure && _nbCg.dom.nodes.size > 0
+    && !!svg.querySelector('.nb-cg-backdrop') && !!overlay.querySelector('.nb-cg-ticks');
+  const nodesSvg = light ? '' : [...layout.targets].map(([id, target]) => {
     const node = target.node;
     const classes = ['nb-cg-node-wrap', `kind-${node._kind}`];
     if (node.explored) classes.push('is-explored');
@@ -1273,15 +1335,18 @@ function _nbCgRenderStage() {
       + `<circle class="nb-cg-node-halo" r="${f(target.source ? 24 : target.r + 6)}"></circle>`
       + `<circle class="nb-cg-node" r="${f(target.r)}"></circle></g>`;
   }).join('');
-  svg.innerHTML = `<g class="nb-cg-grid">${grid}</g>`
-    + `<line class="nb-cg-axis" x1="${f(axisL)}" y1="${layout.axisY}" x2="${f(axisR)}" y2="${layout.axisY}"></line>`
-    + guide
-    + `<g class="nb-cg-links">${linkItems.map(link => `<path class="nb-cg-link kind-${link.kind}"></path>`).join('')}</g>`
-    + `<g class="nb-cg-arcs">${arcItems.map(() => '<path class="nb-cg-arc"></path>').join('')}</g>`
-    + `<g class="nb-cg-nodes">${nodesSvg}</g>`;
+  const axisSvg = `<line class="nb-cg-axis" x1="${f(axisL)}" y1="${layout.axisY}" x2="${f(axisR)}" y2="${layout.axisY}"></line>`;
+  if (light) {
+    svg.querySelector('.nb-cg-backdrop').innerHTML = `<g class="nb-cg-grid">${grid}</g>${axisSvg}${guide}`;
+  } else {
+    svg.innerHTML = `<g class="nb-cg-backdrop"><g class="nb-cg-grid">${grid}</g>${axisSvg}${guide}</g>`
+      + `<g class="nb-cg-links">${linkItems.map(link => `<path class="nb-cg-link kind-${link.kind}"></path>`).join('')}</g>`
+      + `<g class="nb-cg-arcs">${arcItems.map(() => '<path class="nb-cg-arc"></path>').join('')}</g>`
+      + `<g class="nb-cg-nodes">${nodesSvg}</g>`;
+  }
 
   const ticksHtml = layout.ticks.map(t => `<div class="nb-cg-tick${t.source ? ' is-source' : ''}" style="left:${f(t.x)}px;top:${layout.axisY + (single ? 9 : 7)}px">${_nbCgEscapeHtml(t.label)}</div>`).join('');
-  const labelsHtml = [...layout.targets].filter(([, target]) => !target.source).map(([id, target]) => (
+  const labelsHtml = light ? '' : [...layout.targets].filter(([, target]) => !target.source).map(([id, target]) => (
     `<div class="nb-cg-label kind-${target.node._kind}${target.side === 'L' ? ' is-left' : ''}" data-id="${_nbCgEscapeAttr(id)}">${_nbCgEscapeHtml(target.label)}</div>`
   )).join('');
   let singleHtml = '';
@@ -1292,7 +1357,12 @@ function _nbCgRenderStage() {
       + `<div class="nb-cg-source-eyebrow">${_nbCgEscapeHtml(_ti('citationGraph.kindSource'))}</div>`
       + `<div class="nb-cg-source-name">${_nbCgEscapeHtml(_nbCgShortRef(layout.source))}</div></div>`;
   }
-  overlay.innerHTML = ticksHtml + singleHtml + labelsHtml;
+  if (light) {
+    overlay.querySelectorAll('.nb-cg-ticks, .nb-cg-col-title, .nb-cg-source-card').forEach(el => el.remove());
+    overlay.insertAdjacentHTML('afterbegin', `<div class="nb-cg-ticks">${ticksHtml}</div>${singleHtml}`);
+  } else {
+    overlay.innerHTML = `<div class="nb-cg-ticks">${ticksHtml}</div>` + singleHtml + labelsHtml;
+  }
 
   if (single) {
     bandsEl.innerHTML = '';
@@ -1327,6 +1397,13 @@ function _nbCgRenderStage() {
       + '</div>').join('');
   }
 
+  _nbCg.dom.sourceCard = overlay.querySelector('.nb-cg-source-card');
+  if (light) {
+    for (const [id, ref] of _nbCg.dom.nodes) ref.target = layout.targets.get(id);
+    _nbCgUpdatePositionsDom();
+    return;
+  }
+  _nbCg.dom.structure = structure;
   // Cache element references: the animation only touches attributes.
   const labels = new Map();
   overlay.querySelectorAll('.nb-cg-label').forEach(el => labels.set(el.dataset.id, el));
@@ -1339,7 +1416,6 @@ function _nbCgRenderStage() {
   _nbCg.dom.links = linkItems.map((link, i) => ({ ...link, path: linkPaths[i] }));
   const arcPaths = svg.querySelectorAll('.nb-cg-arc');
   _nbCg.dom.arcs = arcItems.map((arc, i) => ({ ...arc, path: arcPaths[i] }));
-  _nbCg.dom.sourceCard = overlay.querySelector('.nb-cg-source-card');
   _nbCgUpdatePositionsDom();
 }
 
@@ -1447,7 +1523,8 @@ function _nbCgApplyFocus() {
 function _nbCgUpdateTooltip() {
   const tip = document.getElementById('nb-cg-tooltip');
   if (!tip) return;
-  const id = _nbCg.drag?.moved ? '' : _nbCg.hoveredId;
+  // The list of touching dots already names them: no tooltip over it.
+  const id = _nbCg.drag?.moved || _nbCgPickerOpen() ? '' : _nbCg.hoveredId;
   const target = id && _nbCg.layout?.targets.get(id);
   if (!target) {
     tip.hidden = true;
@@ -1494,6 +1571,7 @@ function _nbCgSelectNode(nodeId) {
   let id = String(nodeId || '');
   if (_nbCg.layout?.mode === 'single' && id === _nbCg.layout.source.id) id = '';
   _nbCg.selectedNodeId = id;
+  _nbCgClosePicker();
   _nbCgApplyFocus();
   _nbCgRenderPanel();
 }
@@ -2019,6 +2097,222 @@ function _nbCgRemoveExpansion(nodeId) {
   _nbCgRebuild();
 }
 
+/* ---------------- Zoom, pan, overlapping nodes ---------------- */
+
+const _NB_CG_ZOOM_MIN = 1;
+const _NB_CG_ZOOM_MAX = 6;
+const _NB_CG_ZOOM_STEP = 1.5;
+
+// anchor: a point of the visible stage (pixels from its top-left corner)
+// that stays under the pointer while the canvas grows or shrinks.
+function _nbCgSetZoom(next, anchor = null) {
+  const stage = document.getElementById('nb-cg-stage');
+  const layout = _nbCg.layout;
+  if (!stage || !layout) return;
+  const zoom = _nbCgClamp(next, _NB_CG_ZOOM_MIN, _NB_CG_ZOOM_MAX);
+  if (Math.abs(zoom - _nbCg.zoom) < 0.001) return;
+  const vx = anchor ? anchor.vx : stage.clientWidth / 2;
+  const vy = anchor ? anchor.vy : stage.clientHeight / 2;
+  // Several wheel events can arrive before the next frame: keep the first
+  // anchor, it was measured on the layout still on screen.
+  if (!_nbCg.zoomAnchor) {
+    _nbCg.zoomAnchor = { rx: (stage.scrollLeft + vx) / layout.W, ry: (stage.scrollTop + vy) / layout.H, vx, vy };
+  }
+  _nbCg.zoom = zoom;
+  _nbCgRenderZoomControls();
+  if (_nbCg.zoomRaf) return;
+  _nbCg.zoomRaf = requestAnimationFrame(() => {
+    _nbCg.zoomRaf = null;
+    _nbCgRelayout();
+  });
+}
+
+function _nbCgApplyZoomAnchor() {
+  const anchor = _nbCg.zoomAnchor;
+  _nbCg.zoomAnchor = null;
+  const stage = document.getElementById('nb-cg-stage');
+  const layout = _nbCg.layout;
+  if (!anchor || !stage || !layout) return;
+  stage.scrollLeft = Math.max(0, anchor.rx * layout.W - anchor.vx);
+  stage.scrollTop = Math.max(0, anchor.ry * layout.H - anchor.vy);
+}
+
+function _nbCgRenderZoomControls() {
+  const zoom = _nbCg.zoom;
+  const reset = document.getElementById('nb-cg-zoom-reset');
+  if (reset) {
+    reset.textContent = `${Math.round(zoom * 100)} %`;
+    reset.disabled = zoom <= _NB_CG_ZOOM_MIN + 0.001;
+  }
+  const zoomOut = document.getElementById('nb-cg-zoom-out');
+  if (zoomOut) zoomOut.disabled = zoom <= _NB_CG_ZOOM_MIN + 0.001;
+  const zoomIn = document.getElementById('nb-cg-zoom-in');
+  if (zoomIn) zoomIn.disabled = zoom >= _NB_CG_ZOOM_MAX - 0.001;
+  const stage = document.getElementById('nb-cg-stage');
+  const layout = _nbCg.layout;
+  if (stage) {
+    // Sizes come from the layout: reading the DOM here would force a reflow.
+    stage.classList.toggle('is-zoomed', zoom > _NB_CG_ZOOM_MIN + 0.001);
+    stage.classList.toggle('is-pannable', !!layout && (layout.W > _nbCg.stage.w + 1 || layout.H > _nbCg.stage.h + 1));
+  }
+}
+
+// The search bar, the band names and the year axis stay in view while the
+// zoomed canvas scrolls under them.
+function _nbCgPinChrome() {
+  const stage = document.getElementById('nb-cg-stage');
+  if (!stage) return;
+  const x = stage.scrollLeft;
+  const y = stage.scrollTop;
+  const topbar = document.getElementById('nb-cg-topbar');
+  if (topbar) topbar.style.transform = x || y ? `translate(${x}px, ${y}px)` : '';
+  const gutters = document.getElementById('nb-cg-gutters');
+  if (gutters) gutters.style.transform = x ? `translateX(${x}px)` : '';
+  stage.classList.toggle('is-scrolled-x', x > 0);
+  const ticks = stage.querySelector('.nb-cg-ticks');
+  const layout = _nbCg.layout;
+  if (ticks && layout) {
+    const tickTop = layout.axisY + (layout.mode === 'single' ? 9 : 7);
+    const shift = Math.min(0, y + (_nbCg.stage.h || stage.clientHeight) - 22 - tickTop);
+    ticks.style.transform = shift ? `translateY(${shift}px)` : '';
+    stage.classList.toggle('is-axis-floating', shift < 0);
+  }
+}
+
+// Scrolls the stage so a node sits in the middle of what is visible.
+function _nbCgCenterOn(id) {
+  const stage = document.getElementById('nb-cg-stage');
+  const target = _nbCg.layout?.targets.get(id);
+  if (!stage || !target) return;
+  const left = target.x - stage.clientWidth / 2;
+  const top = target.y - stage.clientHeight / 2;
+  if (typeof stage.scrollTo === 'function') {
+    stage.scrollTo({ left, top, behavior: _nbCgMotionEnabled() ? 'smooth' : 'auto' });
+  } else {
+    stage.scrollLeft = left;
+    stage.scrollTop = top;
+  }
+}
+
+// Every dot under a point, nearest first.
+function _nbCgNodesAt(point) {
+  const hits = [];
+  for (const [id, ref] of _nbCg.dom.nodes) {
+    const p = _nbCgPos(id);
+    if (!p) continue;
+    const d = Math.hypot(p.x - point.x, p.y - point.y);
+    if (d <= ref.target.r + 3) hits.push({ id, d, target: ref.target });
+  }
+  return hits.sort((a, b) => a.d - b.d);
+}
+
+function _nbCgPickerOpen() {
+  return !!document.getElementById('nb-cg-picker');
+}
+
+function _nbCgClosePicker({ restoreFocus = false } = {}) {
+  const picker = document.getElementById('nb-cg-picker');
+  if (!picker) return;
+  const returnId = picker.dataset.returnId || '';
+  picker.remove();
+  if (_nbCg.hoveredId && !_nbCg.drag) _nbCgSetHovered('');
+  if (restoreFocus) _nbCg.dom.nodes.get(returnId)?.g.focus({ preventScroll: true });
+}
+
+// Dots that still touch: list them so the right one can be chosen.
+function _nbCgOpenPicker(hits, point) {
+  const stage = document.getElementById('nb-cg-stage');
+  if (!stage) return;
+  _nbCgClosePicker();
+  const items = hits.map(({ id, target }) => {
+    const node = target.node;
+    const kind = target.source ? 'source' : node._kind;
+    const title = node.title || _ti('citationGraph.unknownTitle');
+    return `<button type="button" class="nb-cg-picker-item kind-${kind}" role="menuitem" data-cg-pick="${_nbCgEscapeAttr(id)}">`
+      + '<span class="nb-cg-picker-dot" aria-hidden="true"></span>'
+      + `<span class="nb-cg-picker-text"><span class="nb-cg-picker-ref">${_nbCgEscapeHtml(_nbCgShortRef(node) || _nbCgNodeLabel(node, false))}</span>`
+      + `<span class="nb-cg-picker-title">${_nbCgEscapeHtml(title)}</span></span></button>`;
+  }).join('');
+  const picker = document.createElement('div');
+  picker.id = 'nb-cg-picker';
+  picker.dataset.returnId = hits[0]?.id || '';
+  picker.setAttribute('role', 'menu');
+  picker.setAttribute('aria-label', _ti('citationGraph.pickerAria'));
+  picker.innerHTML = `<div class="nb-cg-picker-head">${_nbCgEscapeHtml(_ti('citationGraph.pickerTitle', { count: hits.length }))}</div>${items}`;
+  stage.appendChild(picker);
+  const width = picker.offsetWidth || 280;
+  const height = picker.offsetHeight || 200;
+  const minLeft = stage.scrollLeft + 8;
+  const maxLeft = stage.scrollLeft + stage.clientWidth - width - 8;
+  const minTop = stage.scrollTop + 8;
+  const maxTop = stage.scrollTop + stage.clientHeight - height - 8;
+  const left = point.x + 14 > maxLeft ? point.x - width - 14 : point.x + 14;
+  picker.style.left = `${Math.round(_nbCgClamp(left, minLeft, Math.max(minLeft, maxLeft)))}px`;
+  picker.style.top = `${Math.round(_nbCgClamp(point.y - 20, minTop, Math.max(minTop, maxTop)))}px`;
+  picker.addEventListener('mouseover', (event) => {
+    const item = event.target.closest?.('[data-cg-pick]');
+    if (item) _nbCgSetHovered(item.dataset.cgPick);
+  });
+  picker.addEventListener('mouseleave', () => _nbCgSetHovered(''));
+  picker.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const buttons = [...picker.querySelectorAll('[data-cg-pick]')];
+    const index = buttons.indexOf(document.activeElement);
+    const next = buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length];
+    next?.focus();
+  });
+  picker.querySelector('[data-cg-pick]')?.focus({ preventScroll: true });
+  _nbCgUpdateTooltip();
+}
+
+// Matches of the search box among the works on screen, in reading order:
+// corpus first, then left to right.
+function _nbCgSearchMatches() {
+  const layout = _nbCg.layout;
+  if (!layout || !_nbCg.query.trim()) return [];
+  const rank = target => (target.source || target.node._kind === 'corpus' ? 0 : 1);
+  return [...layout.targets.entries()]
+    .filter(([, target]) => _nbCgMatchesQuery(target.node))
+    .sort(([, a], [, b]) => rank(a) - rank(b) || a.x - b.x || a.y - b.y)
+    .map(([id]) => id);
+}
+
+function _nbCgRenderSearchCount() {
+  const el = document.getElementById('nb-cg-search-count');
+  if (!el) return;
+  const matches = _nbCg.query.trim() ? _nbCgSearchMatches() : null;
+  if (!matches) {
+    el.textContent = '';
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  if (!matches.length) el.textContent = _ti('citationGraph.searchNone');
+  else if (_nbCg.searchCursor >= 0) el.textContent = `${_nbCg.searchCursor + 1} / ${matches.length}`;
+  else el.textContent = _ti(matches.length === 1 ? 'citationGraph.searchOne' : 'citationGraph.searchMany', { count: matches.length });
+}
+
+// Enter in the search box selects the next match and brings it into view.
+function _nbCgSearchNext(direction = 1) {
+  const matches = _nbCgSearchMatches();
+  if (!matches.length) {
+    _nbCgRenderSearchCount();
+    return;
+  }
+  const cursor = _nbCg.searchCursor < 0
+    ? (direction > 0 ? 0 : matches.length - 1)
+    : (_nbCg.searchCursor + direction + matches.length) % matches.length;
+  _nbCg.searchCursor = cursor;
+  const id = matches[cursor];
+  _nbCgSelectNode(id);
+  // The source paper of a one-paper graph is the default selection.
+  if (_nbCg.layout?.mode === 'single' && id === _nbCg.layout.source.id) _nbCg.selectedNodeId = id;
+  _nbCgApplyFocus();
+  _nbCgCenterOn(id);
+  _nbCgRenderSearchCount();
+}
+
 /* ---------------- Events ---------------- */
 
 function _nbCgStagePoint(event) {
@@ -2046,8 +2340,18 @@ function _nbCgBindUiOnce() {
   });
   document.getElementById('nb-cg-search')?.addEventListener('input', (event) => {
     _nbCg.query = String(event.target.value || '');
+    _nbCg.searchCursor = -1;
     _nbCgApplyFocus();
+    _nbCgRenderSearchCount();
   });
+  document.getElementById('nb-cg-search')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    _nbCgSearchNext(event.shiftKey ? -1 : 1);
+  });
+  document.getElementById('nb-cg-zoom-in')?.addEventListener('click', () => _nbCgSetZoom(_nbCg.zoom * _NB_CG_ZOOM_STEP));
+  document.getElementById('nb-cg-zoom-out')?.addEventListener('click', () => _nbCgSetZoom(_nbCg.zoom / _NB_CG_ZOOM_STEP));
+  document.getElementById('nb-cg-zoom-reset')?.addEventListener('click', () => _nbCgSetZoom(_NB_CG_ZOOM_MIN));
 
   const stage = document.getElementById('nb-cg-stage');
   const svg = document.getElementById('nb-cg-svg');
@@ -2055,12 +2359,29 @@ function _nbCgBindUiOnce() {
   stage.addEventListener('click', (event) => {
     if (_nbCg.suppressClick) return;
     const target = event.target;
+    const pick = target.closest?.('[data-cg-pick]');
+    if (pick) {
+      _nbCgSelectNode(pick.dataset.cgPick);
+      return;
+    }
+    if (_nbCgPickerOpen()) {
+      // A click beside the list only closes it.
+      if (!target.closest?.('#nb-cg-picker')) _nbCgClosePicker();
+      return;
+    }
     const action = target.closest?.('[data-cg-action]');
     if (action) {
       _nbCgHandleAction(action);
       return;
     }
-    const node = target.closest?.('.nb-cg-node-wrap, .nb-cg-label');
+    const dot = target.closest?.('.nb-cg-node-wrap');
+    if (dot) {
+      const hits = _nbCgNodesAt(_nbCgStagePoint(event));
+      if (hits.length > 1) _nbCgOpenPicker(hits, _nbCgStagePoint(event));
+      else _nbCgSelectNode(dot.dataset.id);
+      return;
+    }
+    const node = target.closest?.('.nb-cg-label');
     if (node) {
       _nbCgSelectNode(node.dataset.id);
       return;
@@ -2093,6 +2414,39 @@ function _nbCgBindUiOnce() {
     event.preventDefault();
     _nbCgSelectNode(node.dataset.id);
   });
+  // Wheel: zoom around the pointer. A sideways trackpad swipe scrolls, and
+  // at 100 % scrolling down is left to the page.
+  stage.addEventListener('wheel', (event) => {
+    if (!_nbCg.layout || event.target.closest?.('#nb-cg-topbar, #nb-cg-picker, #nb-cg-empty, .nb-cg-gutter')) return;
+    if (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+    const delta = _nbCgClamp(event.deltaY * unit, -200, 200);
+    if (delta > 0 && _nbCg.zoom <= _NB_CG_ZOOM_MIN + 0.001) return;
+    event.preventDefault();
+    const rect = stage.getBoundingClientRect();
+    _nbCgSetZoom(_nbCg.zoom * Math.exp(-delta * (event.ctrlKey ? 0.01 : 0.0018)), {
+      vx: event.clientX - rect.left,
+      vy: event.clientY - rect.top,
+    });
+  }, { passive: false });
+  stage.addEventListener('scroll', () => _nbCgPinChrome(), { passive: true });
+  stage.addEventListener('keydown', (event) => {
+    if (!_nbCg.layout || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest?.('input, textarea, #nb-cg-picker')) return;
+    if (event.key === '+' || event.key === '=') _nbCgSetZoom(_nbCg.zoom * _NB_CG_ZOOM_STEP);
+    else if (event.key === '-') _nbCgSetZoom(_nbCg.zoom / _NB_CG_ZOOM_STEP);
+    else if (event.key === '0') _nbCgSetZoom(_NB_CG_ZOOM_MIN);
+    else return;
+    event.preventDefault();
+  });
+  // Panning: dragging the background moves a zoomed canvas.
+  stage.addEventListener('mousedown', (event) => {
+    if (event.button !== 0 || !_nbCg.layout) return;
+    if (event.target.closest?.('.nb-cg-node-wrap, .nb-cg-label, #nb-cg-topbar, #nb-cg-picker, #nb-cg-empty, #nb-cg-loading, button, a, input')) return;
+    if (stage.scrollWidth <= stage.clientWidth + 1 && stage.scrollHeight <= stage.clientHeight + 1) return;
+    event.preventDefault();
+    _nbCg.pan = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop, moved: false };
+  });
   // Dragging: the node follows the pointer, its neighbours are
   // pulled along, and on release everything springs back to its place.
   svg.addEventListener('mousedown', (event) => {
@@ -2103,6 +2457,20 @@ function _nbCgBindUiOnce() {
     _nbCg.drag = { id: node.dataset.id, moved: false, startX: event.clientX, startY: event.clientY };
   });
   window.addEventListener('mousemove', (event) => {
+    const pan = _nbCg.pan;
+    if (pan) {
+      const dx = event.clientX - pan.x;
+      const dy = event.clientY - pan.y;
+      if (!pan.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+      if (!pan.moved) {
+        pan.moved = true;
+        stage.classList.add('is-panning');
+        _nbCgClosePicker();
+      }
+      stage.scrollLeft = pan.left - dx;
+      stage.scrollTop = pan.top - dy;
+      return;
+    }
     const drag = _nbCg.drag;
     if (!drag) return;
     if (!drag.moved && Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) < 3) return;
@@ -2122,6 +2490,17 @@ function _nbCgBindUiOnce() {
     _nbCgStartLoop();
   });
   window.addEventListener('mouseup', () => {
+    const pan = _nbCg.pan;
+    if (pan) {
+      _nbCg.pan = null;
+      stage.classList.remove('is-panning');
+      // The click that ends a pan must not clear the selection.
+      if (pan.moved) {
+        _nbCg.suppressClick = true;
+        window.setTimeout(() => { _nbCg.suppressClick = false; }, 0);
+      }
+      return;
+    }
     const drag = _nbCg.drag;
     if (!drag) return;
     _nbCg.drag = null;

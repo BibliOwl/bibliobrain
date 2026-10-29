@@ -48,7 +48,7 @@ const state = {
   activeStreamRequestId: '',
   activeStreamModel: '',
   activeStreamChatId: '',
-  chatArticleScope: { path: '', title: '', once: false, paths: [], titles: [] },
+  chatArticleScope: { path: '', title: '', once: false, paths: [], titles: [], notebook: null },
   chatArticleScopeRevision: 0,
   chatForceVisualOnce: false,
   libRows: [],
@@ -614,9 +614,15 @@ function _ragStatusTask(phase, translatedLabel, translatedDetail, percentage) {
   if (busy || loadingPhase) {
     task.tone = 'working';
     if (busy && loadingPhase) {
-      task.text = percentage !== null
-        ? _ti('status.ragLoading', { pct: percentage })
-        : _ti('status.ragLoadingNoPct');
+      // The step keeps a lower percentage of the next step from reading as a restart.
+      const step = state.ragLastProgressEvent;
+      if (percentage !== null && step?.stage && step?.stage_count) {
+        task.text = _ti('status.ragLoadingStep', { stage: step.stage, count: step.stage_count, pct: percentage });
+      } else {
+        task.text = percentage !== null
+          ? _ti('status.ragLoading', { pct: percentage })
+          : _ti('status.ragLoadingNoPct');
+      }
     } else if (percentage !== null) {
       task.text = `${translatedLabel} · ${percentage}%`;
     }

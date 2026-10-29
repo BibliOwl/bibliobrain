@@ -7904,18 +7904,24 @@ body.citation-graph-open { overflow: hidden; }
   min-height: 0;
 }
 
-/* Stage: the layout fills it; there is no zoom or pan. It only scrolls when
-   the stage is smaller than the layout's minimum size. */
+/* Stage: at 100 % the layout fills it. Zooming lays the graph out on a
+   larger canvas that scrolls; the background is dragged to move around, so
+   the scrollbars are hidden. */
 #nb-cg-stage {
   position: relative;
   min-width: 0;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-width: none;
   background-color: var(--veil-strong);
   background-image: radial-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px);
   background-size: 22px 22px;
 }
+#nb-cg-stage::-webkit-scrollbar { display: none; }
+#nb-cg-stage.is-pannable { cursor: grab; }
+#nb-cg-stage.is-panning,
+#nb-cg-stage.is-panning * { cursor: grabbing !important; }
 #nb-cg-stage.is-single {
   background-image:
     radial-gradient(circle at 60% 45%, rgba(99, 102, 241, 0.11), transparent 62%),
@@ -7935,6 +7941,17 @@ body.citation-graph-open { overflow: hidden; }
 #nb-cg-svg { z-index: 1; display: block; user-select: none; }
 #nb-cg-overlay { z-index: 2; }
 #nb-cg-gutters { z-index: 3; }
+/* Band names stay on the left of a scrolled canvas, over a veil. */
+#nb-cg-stage.is-scrolled-x .nb-cg-gutter {
+  padding: 6px 8px 8px 0;
+  background: linear-gradient(90deg, var(--veil-strong) 75%, transparent);
+}
+.nb-cg-ticks { position: absolute; top: 0; left: 0; }
+#nb-cg-stage.is-axis-floating .nb-cg-tick {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--veil-strong);
+}
 
 .nb-cg-band { position: absolute; left: 0; right: 0; border-top: 1px solid rgba(255, 255, 255, 0.05); }
 .nb-cg-band.kind-corpus { background: rgba(99, 102, 241, 0.06); border-top-color: rgba(129, 140, 248, 0.2); }
@@ -8107,6 +8124,104 @@ body.citation-graph-open { overflow: hidden; }
 }
 #nb-cg-search::placeholder { color: var(--muted); }
 #nb-cg-legend-text { margin-left: auto; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+#nb-cg-search-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#nb-cg-search-count[hidden] { display: none; }
+#nb-cg-zoom {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--veil-strong);
+  overflow: hidden;
+  pointer-events: auto;
+}
+#nb-cg-zoom button {
+  min-width: 28px;
+  padding: 4px 7px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+#nb-cg-zoom #nb-cg-zoom-reset {
+  min-width: 52px;
+  border-inline: 1px solid var(--border);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+#nb-cg-zoom button:hover:not(:disabled) { background: rgba(129, 140, 248, 0.14); color: var(--text); }
+#nb-cg-zoom button:disabled { color: var(--muted); cursor: default; opacity: 0.6; }
+#nb-cg-zoom button:focus-visible { outline: 2px solid rgba(129, 140, 248, 0.8); outline-offset: -2px; }
+
+/* List of the dots under a click, when they still touch. */
+#nb-cg-picker {
+  position: absolute;
+  z-index: 6;
+  width: 280px;
+  max-height: 280px;
+  box-sizing: border-box;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  background: var(--surface-float);
+  box-shadow: 0 10px 30px rgba(2, 6, 23, 0.55);
+  cursor: default;
+}
+.nb-cg-picker-head {
+  padding: 4px 6px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.nb-cg-picker-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nb-cg-picker-item:hover,
+.nb-cg-picker-item:focus-visible { background: rgba(129, 140, 248, 0.14); color: var(--text); outline: none; }
+.nb-cg-picker-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 3px;
+  border-radius: 50%;
+  background: var(--cg-corpus-text);
+}
+.nb-cg-picker-item.kind-prior .nb-cg-picker-dot { background: var(--cg-prior-stroke); }
+.nb-cg-picker-item.kind-derivative .nb-cg-picker-dot { background: var(--cg-derivative-stroke); }
+.nb-cg-picker-item.kind-source .nb-cg-picker-dot { background: var(--accent-text); }
+.nb-cg-picker-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.nb-cg-picker-ref { color: var(--text); font-size: 12px; font-weight: 650; }
+.nb-cg-picker-title {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 #nb-cg-tooltip {
   position: absolute;

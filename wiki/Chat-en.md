@@ -34,6 +34,12 @@ difficult questions.
 
 ## Restrict the sources
 
+In an existing conversation, open **Options > Filter by paper**, search for a
+title (a few words are enough), an author or a year, then select the paper. The next answers will use
+that paper without starting a new conversation. Only indexed papers included in
+RAG are offered. Search ignores case and accents. The active filter appears above
+the message box; click **×** to remove it or select another paper to replace it.
+
 If Zotero is connected, **Options > Zotero filters**, below the message field,
 limits chat to selected **tags** or **collections**. The panel's reset button
 removes these filters.

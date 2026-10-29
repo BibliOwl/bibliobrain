@@ -608,3 +608,76 @@ def test_stream_notebook_chat_keeps_notes_apart_from_numbered_sources(
     assert "ne se citent jamais avec [x]" in prompt
     assert "d'apres vos notes" in prompt
     assert "les sources numerotees et les notes du carnet" in prompt
+
+
+def test_long_source_shows_its_start_and_its_conclusion(workspace_tmp_dir: Path) -> None:
+    # The notebook chat used to send only the first 1200 characters of a PDF.
+    notebooks = _load_notebooks_module(workspace_tmp_dir)
+    body = " ".join(f"method-{idx}" for idx in range(3000))
+    text = f"Abstract. We model screening currents.\n{body}\n5. Conclusion\nThe T-A model is faster."
+
+    excerpt = notebooks._source_excerpt(text, 1200, "Sur quoi ces sources sont-elles en désaccord ?")
+
+    assert len(excerpt) <= 1210
+    assert excerpt.startswith("Abstract. We model screening currents.")
+    assert "Conclusion The T-A model is faster." in excerpt
+
+
+def test_long_source_prefers_the_passage_matching_the_question(workspace_tmp_dir: Path) -> None:
+    notebooks = _load_notebooks_module(workspace_tmp_dir)
+    filler = " ".join(f"word{idx}" for idx in range(1500))
+    text = f"Intro. {filler} The hysteresis losses reach 3 J per cycle. {filler} Conclusion. Done."
+
+    excerpt = notebooks._source_excerpt(text, 1200, "What are the hysteresis losses?")
+
+    assert "hysteresis losses reach 3 J" in excerpt
+
+
+def _prompt_for(notebooks: Any, monkeypatch: Any, nb_id: str, message: str) -> str:
+    captured: dict[str, str] = {}
+    monkeypatch.setattr(notebooks, "is_remote_provider", lambda: True)
+    monkeypatch.setattr(notebooks, "create_chat_llm", lambda model_name: object())
+
+    def fake_stream_text(llm: object, prompt: str, abort_signal: Any = None) -> list[str]:
+        captured["prompt"] = prompt
+        return ["ok [1]."]
+
+    monkeypatch.setattr(notebooks, "stream_text", fake_stream_text)
+    list(notebooks.stream_notebook_chat(nb_id, message, "demo-model", persist_history=False))
+    return captured["prompt"]
+
+
+def test_every_suggested_question_gets_its_own_task(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    notebooks = _load_notebooks_module(workspace_tmp_dir)
+    nb = notebooks.create_notebook("REBCO")
+    notebooks.add_source(nb["id"], "T-A homogeneous model", "Abstract. Screening currents.")
+    notebooks.add_source(nb["id"], "MI magnet model", "Abstract. Metal-insulated coils.")
+    expected = {
+        "Sur quoi ces sources sont-elles en désaccord ?": "Ne conclus pas seulement qu'aucun desaccord",
+        "What do these sources disagree on?": "Ne conclus pas seulement qu'aucun desaccord",
+        "Quelles sont les idées principales de ces sources ?": "l'idee principale de chaque source",
+        "What are the main ideas of these sources?": "l'idee principale de chaque source",
+        "Quelles questions ces sources laissent-elles ouvertes ?": "Releve les limites, questions ouvertes",
+        "Which questions do these sources leave open?": "Releve les limites, questions ouvertes",
+    }
+    for message, task in expected.items():
+        prompt = _prompt_for(notebooks, monkeypatch, nb["id"], message)
+        assert task in prompt, message
+        assert "Prefere 1 ou 2 courts paragraphes" not in prompt
+    plain = _prompt_for(notebooks, monkeypatch, nb["id"], "Quelle est la divergence du champ ?")
+    assert "Ne conclus pas seulement" not in plain
+
+
+def test_text_only_sources_are_marked_for_the_model(
+    workspace_tmp_dir: Path, monkeypatch: Any
+) -> None:
+    notebooks = _load_notebooks_module(workspace_tmp_dir)
+    nb = notebooks.create_notebook("Notes")
+    notebooks.add_source(nb["id"], "Pasted abstract", "Title. Abstract only.")
+
+    prompt = _prompt_for(notebooks, monkeypatch, nb["id"], "De quoi parle cet article ?")
+
+    assert "[1] Pasted abstract (texte ajoute a la main, sans PDF)" in prompt
+    assert "ne lui prete pas de details absents" in prompt

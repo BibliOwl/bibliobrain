@@ -2013,7 +2013,7 @@ def test_stream_chat_api_accepts_unstructured_local_output_before_streaming(
     monkeypatch.setattr(rag.query_engine, "_build_retrieval_query", lambda msg, hist: msg)
     monkeypatch.setattr(rag.query_engine, "_build_history_context", lambda hist: "")
     monkeypatch.setattr(
-        rag.query_engine, "_build_response_style_guide", lambda msg, model_name=None: ""
+        rag.query_engine, "_build_response_style_guide", lambda msg, **kwargs: ""
     )
     monkeypatch.setattr(rag.query_engine, "is_remote_provider", lambda: False)
     monkeypatch.setattr(rag.query_engine, "is_ollama_provider", lambda: True)
@@ -2080,7 +2080,7 @@ def test_stream_chat_api_streams_content_when_requested_thinking_is_not_supporte
     monkeypatch.setattr(rag.query_engine, "_build_retrieval_query", lambda msg, hist: msg)
     monkeypatch.setattr(rag.query_engine, "_build_history_context", lambda hist: "")
     monkeypatch.setattr(
-        rag.query_engine, "_build_response_style_guide", lambda msg, model_name=None: ""
+        rag.query_engine, "_build_response_style_guide", lambda msg, **kwargs: ""
     )
     monkeypatch.setattr(rag.query_engine, "is_remote_provider", lambda: False)
     monkeypatch.setattr(rag.query_engine, "is_ollama_provider", lambda: True)
@@ -2122,7 +2122,7 @@ def test_stream_chat_api_strips_drafting_from_final_answer_when_thinking_enabled
     monkeypatch.setattr(rag.query_engine, "_build_retrieval_query", lambda msg, hist: msg)
     monkeypatch.setattr(rag.query_engine, "_build_history_context", lambda hist: "")
     monkeypatch.setattr(
-        rag.query_engine, "_build_response_style_guide", lambda msg, model_name=None: ""
+        rag.query_engine, "_build_response_style_guide", lambda msg, **kwargs: ""
     )
     monkeypatch.setattr(rag.query_engine, "is_remote_provider", lambda: False)
     monkeypatch.setattr(rag.query_engine, "is_ollama_provider", lambda: True)
@@ -2187,7 +2187,7 @@ def test_stream_chat_api_repairs_guard_error_before_streaming(
     monkeypatch.setattr(rag.query_engine, "_build_retrieval_query", lambda msg, hist: msg)
     monkeypatch.setattr(rag.query_engine, "_build_history_context", lambda hist: "")
     monkeypatch.setattr(
-        rag.query_engine, "_build_response_style_guide", lambda msg, model_name=None: ""
+        rag.query_engine, "_build_response_style_guide", lambda msg, **kwargs: ""
     )
     monkeypatch.setattr(rag.query_engine, "is_ollama_provider", lambda: False)
     monkeypatch.setattr(rag.query_engine, "create_chat_llm", lambda *_args, **_kwargs: object())
@@ -2964,3 +2964,97 @@ def test_a_broad_question_on_one_paper_opens_with_passages_spread_over_it(
         "Quelle est la Tc de LaFeAsO ?", searched, {"sources": [rel_path]}, 6
     )
     assert narrow == searched
+
+
+def test_stream_chat_api_warns_when_a_cited_page_draws_symbols_as_images(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    monkeypatch.setattr(
+        rag.query_engine,
+        "_pages_with_image_symbols",
+        lambda docs: "« Insert », p. 5",
+    )
+
+    events, _ = _stream_with_fake_answer(
+        rag,
+        monkeypatch,
+        _SCIF_DOCS,
+        "Le SCIF vaut -0,42 T [S1].",
+        "Quel est le SCIF apres la premiere rampe ?",
+    )
+
+    answer = _final_answer(events)
+    assert answer.startswith("Le SCIF vaut -0,42 T [S1].")
+    assert answer.endswith(
+        "*Attention : dans « Insert », p. 5, certains symboles (µ, exposants, signes) sont "
+        "dessinés en images et manquent dans le texte lu. Vérifiez les unités sur le PDF.*"
+    )
+
+
+def _patch_offline_init(rag: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(rag.query_engine.state, "clear_document_scan_cache", lambda: None)
+    monkeypatch.setattr(rag.query_engine, "_refresh_zotero_library_cache", lambda: None)
+    monkeypatch.setattr(rag.query_engine, "_current_embedding_model", lambda: "embed-a")
+    monkeypatch.setattr(
+        rag.query_engine, "current_embedding_profile_label", lambda model: "embed-a"
+    )
+    monkeypatch.setattr(rag.query_engine, "get_embedding_provider_mode", lambda: "remote")
+    monkeypatch.setattr(rag.query_engine, "requires_local_ollama_embeddings", lambda: False)
+    monkeypatch.setattr(rag.query_engine, "create_embeddings", lambda model: object())
+    monkeypatch.setattr(rag.query_engine, "Chroma", FakeChroma)
+
+
+def test_init_rag_keeps_the_index_when_the_documents_folder_is_unreachable(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    _patch_offline_init(rag, monkeypatch)
+    monkeypatch.setattr(rag.query_engine.state, "find_pdfs", lambda: [])
+    profile = rag.query_engine.resolve_vector_index_profile(
+        chunk_size=1000, embedding_model="embed-a"
+    )
+    profile_path = Path(str(profile["path"]))
+    profile_path.mkdir(parents=True, exist_ok=True)
+    (profile_path / "placeholder.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        rag.query_engine,
+        "_load_manifest_entries",
+        lambda **kwargs: {"papers/a.pdf": {"file_sig": "sig", "zotero_sig": ""}},
+    )
+    saved: list[Any] = []
+    monkeypatch.setattr(
+        rag.query_engine, "_save_manifest_entries", lambda *args, **kwargs: saved.append(args)
+    )
+    # An unplugged drive: the folder itself is gone, not only its files.
+    rag.data_dir.rmdir()
+
+    ok, msg = rag.query_engine.init_rag("chat-model", 0.3, force_reload=True)
+
+    assert ok is False
+    assert "suspendu" in msg
+    assert saved == []
+
+
+def test_init_rag_does_not_build_an_unprepared_library_behind_a_question(
+    workspace_tmp_dir: Path,
+    monkeypatch: Any,
+) -> None:
+    rag = _load_rag_modules(workspace_tmp_dir)
+    _patch_offline_init(rag, monkeypatch)
+    monkeypatch.setattr("src.library_profiles.active_profile_id", lambda: "hts")
+    built: list[str] = []
+
+    def scan() -> list[tuple[str, str]]:
+        built.append("scan")
+        return []
+
+    monkeypatch.setattr(rag.query_engine.state, "find_pdfs", scan)
+
+    ok, msg = rag.query_engine.init_rag("chat-model", 0.3, force_reload=False, build_missing=False)
+
+    assert ok is False
+    assert msg == rag.query_engine.NOT_PREPARED_MESSAGE
+    assert built == []

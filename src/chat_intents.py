@@ -238,6 +238,46 @@ _PLURAL_PAPER_NOUN_RE = re.compile(
 )
 
 
+_SELECTION_SUMMARY_RE = re.compile(
+    r"\b(?:resume[rsz]?|resumons|synthese|synthetise[rsz]?|summari[sz]e|summary|summaries"
+    r"|overview|tl\s?dr|de quoi parlent|what are (?:these|they) about)\b"
+)
+# Words a bare "summarize these papers" request is made of. Anything else is
+# a topic ("résume les résultats sur le courant critique"), which the
+# similarity search must keep.
+_SELECTION_SUMMARY_FILLER = frozenset(
+    """
+    resume resumer resumes resumez resumons synthese synthetise synthetiser synthetisez
+    summarize summarise summary summaries overview tl dr de quoi parlent parle what are about
+    moi me m nous peux peut pouvez tu vous stp svp merci please can could you give a an the
+    fais faire fait donne donner une un des les le la l ces ce cet cette mes my these those them
+    they this of for me pdf pdfs article articles papier papiers paper papers document documents
+    publication publications etude etudes study studies source sources texte textes carnet notebook
+    selection selectionnes choisis chacun chacune chaque each one by un par en in quelques few
+    lignes lines phrases sentences mots words bref breve brief brievement briefly court courte short
+    rapide rapidement quickly detaille detaillee detailed complet complete global globale general
+    francais anglais french english et and puis then
+    paragraphe paragraphes paragraph paragraphs du de d per pour with avec sa son ses leur leurs
+    its their separement separately cite citer cites citez citation citations reference references
+    liste list puces bullet bullets points deux trois two three
+    """.split()
+)
+
+
+def is_selection_summary_request(message: str) -> bool:
+    """"Résume-moi ces PDF": a summary of the chosen articles, not a topical question.
+
+    Only meaningful when several articles are selected: the words of such a
+    request say nothing about the papers, so a similarity search on them
+    picks passages at random.
+    """
+    normalized = _normalize(message)
+    if not _SELECTION_SUMMARY_RE.search(normalized):
+        return False
+    words = re.findall(r"[a-z]+", normalized)
+    return not [word for word in words if word not in _SELECTION_SUMMARY_FILLER]
+
+
 def is_multi_paper_comparison_request(message: str) -> bool:
     """"Compare ces articles": a comparison between several papers, not inside one."""
     normalized = _normalize(message)
@@ -530,6 +570,44 @@ def _export_scope_from_text(normalized: str) -> ExportScope:
     return "previous"
 
 
+# Words between a list verb and the thing it lists: "liste-moi tous les 10
+# derniers articles", "show me all the most recent papers".
+_LIST_OBJECT_SKIP = frozenset(
+    """
+    moi me m nous vous les la le l des de d du un une tous toutes tout tout all the a an of
+    every each mes my ces these those ses leurs their
+    liste list complete complet complets exhaustive exhaustif
+    derniers dernieres premiers premieres recents recentes principaux principales meilleurs
+    plus most more recent latest last first main key top best new important importants
+    relevant pertinents
+    """.split()
+)
+_LIST_OBJECT_PAPER_RE = re.compile(
+    r"(?:articles?|papiers?|papers?|publications?|etudes?|study|studies|references?|"
+    r"pdfs?|documents?|titres?|titles?|travaux|works?)"
+)
+
+
+def _lists_papers(normalized: str, verb_re: re.Pattern[str]) -> bool:
+    """Whether the verb lists papers, not something found in them.
+
+    "Liste les articles sur X" lists papers; "Liste les méthodes utilisées
+    dans les articles de ma bibliothèque" lists methods, and the papers are
+    only where to look.
+    """
+    tokens = re.findall(r"[a-z0-9]+", normalized)
+    saw_verb = False
+    for index, token in enumerate(tokens):
+        if not verb_re.fullmatch(token):
+            continue
+        saw_verb = True
+        rest = [word for word in tokens[index + 1 :] if word not in _LIST_OBJECT_SKIP]
+        head = next((word for word in rest if not word.isdigit()), "")
+        if not head or _LIST_OBJECT_PAPER_RE.fullmatch(head):
+            return True
+    return not saw_verb
+
+
 def _has_author_filter_hint(raw: str, normalized: str) -> bool:
     return bool(
         _AUTHOR_FILTER_HINT_RE.search(normalized)
@@ -762,6 +840,7 @@ def detect_chat_intent(message: str) -> ChatIntent:
         _LIST_VERB_RE.search(normalized)
         and _PAPER_NOUN_RE.search(normalized)
         and (_EXHAUSTIVE_RE.search(normalized) or re.search(r"\b(?:liste|list)\b", normalized))
+        and _lists_papers(normalized, _LIST_VERB_RE)
     ):
         return ChatIntent(mode="paper_list", query=raw)
 
@@ -782,6 +861,8 @@ def detect_chat_intent(message: str) -> ChatIntent:
     if (
         (_DISCOVERY_VERB_RE.search(normalized) or _LIST_VERB_RE.search(normalized))
         and _PAPER_NOUN_RE.search(normalized)
+        and _lists_papers(normalized, _LIST_VERB_RE)
+        and _lists_papers(normalized, _DISCOVERY_VERB_RE)
         and _has_author_filter_hint(request, normalized)
         and not _DISCOVERY_NEW_RE.search(normalized)
     ):
@@ -858,3 +939,62 @@ __all__ = [
     "requests_library_citations",
     "resolve_retrieval_depth",
 ]
+
+
+# Answer length picked from the question when the setting is "auto".
+_DETAILED_ANSWER_RE = re.compile(
+    r"\b(?:pourquoi|why|explique\w*|expliquer|explain\w*|comment|"
+    r"how\s+(?:does|do|did|is|are|was|were|can|could|would|should|to)|"
+    r"compare\w*|comparaison\w*|contraste\w*|differences?\s+(?:entre|between)|"
+    r"resume|resumer|summari[sz]e\w*|summary|synthese\w*|synthesi[sz]e\w*|"
+    r"analyse\w*|analy[sz]e\w*|analysis|methode\w*|method\w*|"
+    r"detail\w*|en\s+profondeur|in\s+depth|decri\w*|describe\w*|"
+    r"discute\w*|discuss\w*|mecanisme\w*|mechanism\w*)\b"
+)
+_CONCISE_ANSWER_RE = re.compile(
+    # Definitions.
+    r"^(?:qu\s+est[\s-]ce\s+qu|c\s+est\s+quoi|que\s+(?:veut\s+dire|signifie)|"
+    r"definis|define|what\s+(?:is|are|does)\b)|"
+    r"\b(?:definition|signification)\b|"
+    # Formulas and values.
+    r"\b(?:formules?|formulas?|valeurs?|values?|combien|how\s+many|how\s+much)\b|"
+    # Who, when, which (singular "quel", not "quels sont").
+    r"^(?:qui|quand|ou|who|when|where|which|quel|quelle|en\s+quelle\s+annee|in\s+which\s+year)\b|"
+    # Yes or no.
+    r"^(?:est[\s-]ce\s+que|y\s+a[\s-]t[\s-]il|existe[\s-]t[\s-]il|peut[\s-]on|a[\s-]t[\s-]on|"
+    r"is|are|does|do|did|can|could|has|have|was|were)\b|"
+    r"\b\w+-t-(?:il|elle|on)\b|"
+    r"\bje\s+(?:cherche|voudrais\s+savoir|me\s+demande|veux\s+savoir)\s+si\b|"
+    r"\b(?:i\s+wonder|i\s+want\s+to\s+know|tell\s+me)\s+(?:if|whether)\b"
+)
+_ENUMERATION_RE = re.compile(
+    r"\b(?:liste\w*|list|lists|listing|enumere\w*|enumerate|recense\w*|"
+    r"bullet\w*|puces|tableau|table|etapes|steps|"
+    r"classe|classer|classify|classification|regroupe\w*|group|groups|grouping|"
+    r"categor\w*|themes?|thematiques?|sujets|topics|trie|trier|sort)\b"
+)
+# A long question is rarely a short factual one, whatever its first word.
+_CONCISE_MAX_WORDS = 30
+
+
+def is_enumeration_request(message: str) -> bool:
+    """A question asking for a list (themes, methods, steps, groups...)."""
+    normalized = _normalize(chat_request_text(message) or message)
+    return bool(_ENUMERATION_RE.search(normalized)) or is_library_overview_request(message)
+
+
+def classify_answer_length(message: str) -> str:
+    """"concise", "standard" or "detailed" for a question, without a model.
+
+    Explaining, comparing, summarizing or asking for the method gets a
+    detailed answer; a definition, a formula, a value, who/when/which or a
+    yes-no question gets a concise one; anything else a standard one.
+    """
+    normalized = _normalize(chat_request_text(message) or message)
+    if not normalized:
+        return "standard"
+    if _DETAILED_ANSWER_RE.search(normalized):
+        return "detailed"
+    if len(normalized.split()) <= _CONCISE_MAX_WORDS and _CONCISE_ANSWER_RE.search(normalized):
+        return "concise"
+    return "standard"

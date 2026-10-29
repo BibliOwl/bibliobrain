@@ -69,6 +69,9 @@ class ZoteroItem:
     date_added: str = ""
     tags: list[str] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)
+    # Collection path -> "<libraryID>:<collectionKey>", parents included. The
+    # key survives a rename in Zotero, so the index choice can follow it.
+    collection_keys: dict[str, str] = field(default_factory=dict)
     doi: str = ""
     citation_key: str = ""
     citation_count: int = 0
@@ -1420,12 +1423,27 @@ def _load_zotero_sqlite_library(
         )
         types_by_item = {row["itemID"]: row["typeName"] for row in cur.fetchall()}
 
-        cur.execute("SELECT collectionID, collectionName, parentCollectionID FROM collections")
+        cur.execute("PRAGMA table_info(collections)")
+        collection_columns = {str(row[1]) for row in cur.fetchall()}
+        key_columns = (
+            ", key, libraryID"
+            if {"key", "libraryID"} <= collection_columns
+            else (
+                ", key, NULL AS libraryID"
+                if "key" in collection_columns
+                else ", NULL AS key, NULL AS libraryID"
+            )
+        )
+        cur.execute(
+            "SELECT collectionID, collectionName, parentCollectionID"
+            f"{key_columns} FROM collections"
+        )
         collections = cur.fetchall()
         collections_by_id = {
             row["collectionID"]: {
                 "name": row["collectionName"],
                 "parent_id": row["parentCollectionID"],
+                "key": (f"{row['libraryID'] or 1}:{row['key']}" if row["key"] else ""),
             }
             for row in collections
         }
@@ -1450,11 +1468,32 @@ def _load_zotero_sqlite_library(
             """,
             parent_ids,
         )
+
+        def collection_keys(collection_id: int) -> dict[str, str]:
+            """Path -> key of a collection and each of its parents."""
+            keys: dict[str, str] = {}
+            seen: set[int] = set()
+            current: int | None = collection_id
+            while current and current not in seen:
+                seen.add(current)
+                collection = collections_by_id.get(current)
+                if not collection:
+                    break
+                path = collection_path(current)
+                if path and collection["key"]:
+                    keys[path] = collection["key"]
+                current = collection["parent_id"]
+            return keys
+
         collections_by_item: dict[int, list[str]] = {}
+        collection_keys_by_item: dict[int, dict[str, str]] = {}
         for row in cur.fetchall():
             path = collection_path(row["collectionID"])
             if path:
                 collections_by_item.setdefault(row["itemID"], []).append(path)
+                collection_keys_by_item.setdefault(row["itemID"], {}).update(
+                    collection_keys(row["collectionID"])
+                )
 
         cur.execute(
             f"""
@@ -1549,6 +1588,7 @@ def _load_zotero_sqlite_library(
                 set(collections_by_item.get(parent_id, [])),
                 key=casefold_sort_key,
             ),
+            collection_keys=dict(collection_keys_by_item.get(parent_id, {})),
             doi=(field_data.get("DOI", "") or "").strip(),
             citation_key=_extract_citation_key(
                 extra,

@@ -38,6 +38,19 @@ def _pdf_only(pdfs: list[tuple[str, str]]) -> list[tuple[str, str]]:
     ]
 
 
+def _selected_documents() -> list[tuple[str, str]]:
+    """Library documents the user chose to index (src/index_selection.py).
+
+    OCR adds pages to the index, so it must skip what the index leaves out.
+    """
+    from src.index_selection import apply_index_selection
+
+    with state._state_lock:
+        library = dict(state._zotero_library)
+    kept, _skipped = apply_index_selection(state.find_documents(), library)
+    return kept
+
+
 def _ledger_path(index_path: str) -> Path:
     key = hashlib.sha256(os.path.normcase(os.path.abspath(index_path)).encode()).hexdigest()
     return ocr.root() / "indexed" / f"{key[:24]}.json"
@@ -159,7 +172,7 @@ def needs_pass(vectorstore, index_path: str, chunk_size: int, model: str) -> boo
         digest = ocr.model_identity(model)
         return bool(
             pending_documents(
-                vectorstore, index_path, state.find_documents(), chunk_size=chunk_size, digest=digest
+                vectorstore, index_path, _selected_documents(), chunk_size=chunk_size, digest=digest
             )
         )
     except Exception:
@@ -549,7 +562,7 @@ def start(*, retry_failed: bool = False, only_if_needed: bool = False) -> dict:
                 enrich(
                     vectorstore,
                     index_path,
-                    state.find_documents(),
+                    _selected_documents(),
                     chunk_size=chunk_size,
                     model=model,
                     stop=_stop,
@@ -649,7 +662,7 @@ def start_inventory() -> dict:
         if _thread and _thread.is_alive():
             # The pass scans the same PDFs itself and reports its own counts.
             return {"ok": False, "code": "ocr_running", "msg": "L’OCR est déjà en cours."}
-        pdfs = state.find_documents()
+        pdfs = _selected_documents()
         if not _pdf_only(pdfs):
             return {"ok": False, "code": "no_pdfs", "msg": "Aucun PDF trouvé dans le dossier."}
         _inventory_stop.clear()

@@ -187,3 +187,37 @@ def test_one_record_with_the_same_pdf_twice_keeps_its_file_name(workspace_tmp_di
     match = lookup_zotero_item("copies/a.pdf", library)
     assert match is not None and match.item_key == "ITEMAAAA"
     assert not any(item.shared_filename for item in library.values())
+
+
+def test_collections_carry_their_zotero_key_parents_included(workspace_tmp_dir: Path) -> None:
+    db_path = workspace_tmp_dir / "zotero.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            _SCHEMA.replace(
+                "CREATE TABLE collections (\n"
+                "    collectionID INTEGER PRIMARY KEY, collectionName TEXT, parentCollectionID INTEGER\n"
+                ");",
+                "CREATE TABLE collections (\n"
+                "    collectionID INTEGER PRIMARY KEY, collectionName TEXT, parentCollectionID INTEGER,\n"
+                "    key TEXT, libraryID INTEGER\n"
+                ");",
+            )
+        )
+        conn.execute("INSERT INTO items VALUES (1, 'ITEMAAAA', 1, 1)")
+        conn.execute("INSERT INTO items VALUES (2, 'KEYAAAAA', 1, 1)")
+        conn.execute(
+            "INSERT INTO itemAttachments VALUES (2, 1, 'storage:a.pdf', 'application/pdf')"
+        )
+        conn.execute("INSERT INTO collections VALUES (10, 'Fusion', NULL, 'COLFUSIO', 1)")
+        conn.execute("INSERT INTO collections VALUES (11, 'HTS', 10, 'COLHTSXX', 1)")
+        conn.execute("INSERT INTO collectionItems VALUES (1, 11)")
+        conn.commit()
+    finally:
+        conn.close()
+    load_zotero_library.cache_clear()
+    item = lookup_zotero_item("KEYAAAAA/a.pdf", load_zotero_library(str(db_path)))
+
+    assert item is not None
+    assert item.collections == ["Fusion / HTS"]
+    assert item.collection_keys == {"Fusion / HTS": "1:COLHTSXX", "Fusion": "1:COLFUSIO"}

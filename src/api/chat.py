@@ -142,6 +142,7 @@ def _build_chat_debug_metrics(
     output_text: str,
     answer_origin: str = "",
     pipeline_metrics: list[dict] | None = None,
+    answer_length: dict | None = None,
 ) -> dict[str, object]:
     output_tokens = _estimate_debug_token_count(output_text)
     extra_pipeline = list(pipeline_metrics or [])
@@ -150,6 +151,8 @@ def _build_chat_debug_metrics(
         payload = {"model": str(model or "").strip()}
         if str(answer_origin or "").strip():
             payload["answer_origin"] = str(answer_origin or "").strip()
+        if answer_length:
+            payload["answer_length"] = dict(answer_length)
         if extra_pipeline:
             payload["pipeline_metrics"] = extra_pipeline
         return payload
@@ -166,6 +169,8 @@ def _build_chat_debug_metrics(
     }
     if str(answer_origin or "").strip():
         payload["answer_origin"] = str(answer_origin or "").strip()
+    if answer_length:
+        payload["answer_length"] = dict(answer_length)
     if extra_pipeline:
         payload["pipeline_metrics"] = extra_pipeline
     return payload
@@ -862,6 +867,8 @@ class _ChatTurn:
     external_search_confirmation_meta: dict[str, object] | None = None
     pipeline_metrics: list[dict] = field(default_factory=list)
     context_passages: list[dict] = field(default_factory=list)
+    # The answer length setting and the length it resolved to for this question.
+    answer_length: dict | None = None
     saw_error_msg: str = ""
     # An error event arrived after answer text and no text followed it: what
     # was written is a cut answer, not a complete one.
@@ -887,6 +894,7 @@ class _ChatTurn:
             output_text=self.full_answer,
             answer_origin=self.answer_origin,
             pipeline_metrics=self.pipeline_metrics or None,
+            answer_length=self.answer_length,
         )
 
     def discovery_session_entry(self) -> dict[str, object]:
@@ -1027,6 +1035,7 @@ def _persist_user_message(turn: _ChatTurn, tool_name: str | None) -> None:
             "article_title": turn.article_title,
             "article_paths": turn.article_paths,
             "article_scope_once": bool(req.article_scope_once),
+            "article_scope_notebook_id": str(req.article_scope_notebook_id or "").strip(),
             "force_visual_analysis": bool(req.force_visual_analysis),
             "hint_action": str(req.hint_action or "").strip().lower(),
         },
@@ -1283,6 +1292,10 @@ async def _relay_tool_stream(turn: _ChatTurn, gen):
             turn.answer_origin = str(chunk.get("answer_origin") or "").strip()
         elif kind == "pipeline_metrics":
             turn.pipeline_metrics.append(dict(chunk))
+        elif kind == "answer_length":
+            data = chunk.get("data")
+            turn.answer_length = dict(data) if isinstance(data, dict) else None
+            continue
         elif kind == "export_file":
             data = chunk.get("data")
             turn.export_file_meta = dict(data) if isinstance(data, dict) else None
@@ -1315,7 +1328,9 @@ def _save_assistant_answer(turn: _ChatTurn) -> None:
             "article_title": turn.article_title,
             "article_paths": turn.article_paths,
             "article_scope_once": bool(req.article_scope_once),
+            "article_scope_notebook_id": str(req.article_scope_notebook_id or "").strip(),
             "force_visual_analysis": bool(req.force_visual_analysis),
+            **({"answer_length": turn.answer_length} if turn.answer_length else {}),
             "tool_plan": {
                 "action": "clarify" if turn.discovery_topic_missing else tool_plan.action,
                 "calls": (
@@ -1542,6 +1557,9 @@ async def api_chat(req: ChatRequest, *, external_api_allowed: ExternalApiAllowed
             release_stream_abort_signal(request_id)
             return
 
+        from src.rag import state as rag_state
+
+        reader = rag_state.begin_vector_reader()
         try:
             async with contextlib.aclosing(
                 _chat_turn_events(turn, request_id, external_api_allowed=external_api_allowed)
@@ -1564,6 +1582,7 @@ async def api_chat(req: ChatRequest, *, external_api_allowed: ExternalApiAllowed
             _save_failed_answer(turn, "chat_generation_failed")
             yield sse({"type": "error", "msg": "chat_generation_failed"})
         finally:
+            rag_state.end_vector_reader(reader)
             if abort_signal.is_aborted():
                 await release_model_after_stop_async(req.model, stream_abort_reason(abort_signal))
             release_stream_abort_signal(request_id)
@@ -1591,6 +1610,9 @@ async def api_literature_review(req: LiteratureReviewRequest):
             yield sse({"type": "error", "msg": "Message vide."})
             release_stream_abort_signal(request_id)
             return
+        from src.rag import state as rag_state
+
+        reader = rag_state.begin_vector_reader()
         try:
             yield sse({"type": "stream_meta", "request_id": request_id})
             chat, created = ensure_conversation(req.chat_id, seed_message=message)
@@ -1675,6 +1697,7 @@ async def api_literature_review(req: LiteratureReviewRequest):
             _logger.exception("Literature review stream failed")
             yield sse({"type": "error", "msg": "La revue de littérature a échoué."})
         finally:
+            rag_state.end_vector_reader(reader)
             if abort_signal.is_aborted():
                 await stop_local_ollama_model_async(req.model)
             release_stream_abort_signal(request_id)

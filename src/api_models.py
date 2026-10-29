@@ -54,7 +54,7 @@ class InitRequest(BaseModel):
     model: str = ""
     threshold: float = 0.3
     force_reload: bool = False
-    max_chunks: int = 6
+    max_chunks: int = 8
     chunk_size: int | None = None
 
 class RagSettingsRequest(BaseModel):
@@ -113,6 +113,7 @@ class AppSettingsRequest(BaseModel):
     vision_model: str | None = Field(default=None, max_length=200)
     visual_description_model: str | None = Field(default=None, max_length=200)
     visual_analysis_auto_chat: bool | None = None
+    chat_answer_length: Literal["auto", "concise", "standard", "detailed"] | None = None
     ui_language: str | None = Field(default=None, pattern="^(fr|en)$")
 
 
@@ -184,6 +185,7 @@ class ChatRequest(BaseModel):
     article_title: str = Field(default="", max_length=500)
     article_paths: list[str] = Field(default_factory=list, max_length=200)
     article_scope_once: bool = False
+    article_scope_notebook_id: str = Field(default="", max_length=64)
     depth: str = "auto"
     hint_action: str = Field(default="", max_length=40)
     force_visual_analysis: bool = False

@@ -24,6 +24,7 @@ from src.atomic_io import atomic_write_json
 from src.config import CHROMA_PATH
 from src.document_formats import document_index_variant, resolve_document_metadata
 from src.document_guard import max_document_bytes
+from src.library_profiles import LIBRARIES_DIR
 from src.llm_provider import current_embedding_profile_label, required_embedding_model_name
 from src.rag_settings import get_persisted_chunk_size
 from src.rel_paths import normalize_rel_path
@@ -58,6 +59,14 @@ def _chroma_client_settings() -> Settings:
 
 
 def get_vector_db_root() -> str:
+    """Index folder of the active library profile (src/library_profiles.py)."""
+    from src.library_profiles import active_profile_id, profile_index_root
+
+    return profile_index_root(active_profile_id(), base=CHROMA_PATH)
+
+
+def get_all_vector_db_root() -> str:
+    """The folder holding every library profile's indexes."""
     return CHROMA_PATH
 
 
@@ -180,7 +189,7 @@ def _db_path_has_vector_artifacts(path: str) -> bool:
         return True
     try:
         for entry in os.scandir(normalized):
-            if entry.name in {_INDEX_PROFILES_DIR, _ACTIVE_PROFILE_FILE}:
+            if entry.name in {_INDEX_PROFILES_DIR, _ACTIVE_PROFILE_FILE, LIBRARIES_DIR}:
                 continue
             return True
     except Exception:
@@ -1110,6 +1119,9 @@ def get_vector_reload_preview(*, chunk_size: int | None = None) -> dict[str, Any
 
     _refresh_zotero_library_cache()
     pdf_list = _filter_active_zotero_pdf_entries(state.find_pdfs())
+    from src.index_selection import last_skipped, summarize_skipped
+
+    skipped = last_skipped()
     current_entries = _compute_index_entries(pdf_list)
     changes = _preview_manifest_changes(
         current_entries=current_entries,
@@ -1168,6 +1180,8 @@ def get_vector_reload_preview(*, chunk_size: int | None = None) -> dict[str, Any
             f"{changes['removed_count']} supprimes, "
             f"{changes['unchanged_count']} inchanges."
         )
+    if skipped:
+        summary += f" {len(skipped)} documents ecartes par votre selection."
 
     return {
         "ok": bool(pdf_list) or bool(previous_entries),
@@ -1185,6 +1199,8 @@ def get_vector_reload_preview(*, chunk_size: int | None = None) -> dict[str, Any
         "chunk_size": int(resolved_chunk_size),
         "previous_chunk_size": previous_chunk_size,
         "previous_embedding_model": previous_embedding_model,
+        "skipped_count": len(skipped),
+        "skipped_by_reason": summarize_skipped(skipped),
         **changes,
     }
 
@@ -1198,7 +1214,8 @@ def reset_vector_database() -> dict[str, Any]:
     _close_chroma_store(current_store)
     gc.collect()
 
-    root_path = get_vector_db_root()
+    # Every library profile's indexes, as the reset promises.
+    root_path = get_all_vector_db_root()
     existed = os.path.exists(root_path)
     removal_error = ""
     for attempt in range(1, 6):
@@ -1407,3 +1424,84 @@ def mark_documents_for_reindex(rel_paths: list[str]) -> int:
             _load_manifest_embedding_model() or required_embedding_model_name(),
         )
     return marked
+
+
+class LibraryBusyError(RuntimeError):
+    """An answer still reads the loaded index."""
+
+
+def switch_library_profile(profile_id: str) -> None:
+    """Close the loaded index and make ``profile_id`` the active library.
+
+    The caller holds the RAG init lock and loads the new index afterwards.
+    A chat answer or a review still streaming reads the current index: the
+    switch is refused (``LibraryBusyError``) rather than closing it under them.
+    """
+    from src.library_profiles import set_active_profile
+
+    with state.vector_readers_paused() as readers:
+        if readers:
+            raise LibraryBusyError("answer_in_progress")
+        with state._state_lock:
+            current_store = state.vectorstore
+        set_active_profile(profile_id)
+        from src.index_selection import remember_skipped
+
+        # The last reload's skipped files belong to the library just left.
+        remember_skipped([])
+        state.clear_runtime_state()
+        state._reset_vector_load_pause()
+        _close_chroma_store(current_store)
+        state.clear_document_scan_cache()
+        gc.collect()
+
+
+def remove_library_profile_index(path: str) -> bool:
+    """Delete a removed profile's index folder; only folders under libraries/."""
+    libraries_root = os.path.realpath(os.path.join(CHROMA_PATH, LIBRARIES_DIR))
+    target = os.path.realpath(path)
+    if os.path.dirname(target) != libraries_root:
+        return False
+    shutil.rmtree(target, ignore_errors=True)
+    return not os.path.exists(target)
+
+
+def _finished_index(path: str) -> bool:
+    return os.path.exists(os.path.join(path, "chroma.sqlite3")) and not os.path.exists(
+        os.path.join(path, state._INCOMPLETE_INDEX_FILE)
+    )
+
+
+def library_profile_index_state(root: str) -> str:
+    """``ready``, ``outdated`` (only for another model or chunk size) or ``empty``.
+
+    Ready means a finished index for the current embedding model and chunk
+    size, the one ``init_rag`` loads without rebuilding. An index made with
+    another model would be rebuilt from scratch: calling it ready would load
+    nothing and start a full preparation.
+    """
+    profile = build_vector_index_profile()
+    if _finished_index(os.path.join(root, _INDEX_PROFILES_DIR, str(profile["profile_id"]))):
+        return "ready"
+    if _finished_index(root):
+        legacy_chunk = _load_manifest_chunk_size(db_path=root)
+        legacy_model = _load_manifest_embedding_model(db_path=root)
+        if legacy_chunk == int(profile["chunk_size"]) and _normalize_text(
+            legacy_model
+        ) == _normalize_text(str(profile["embedding_model"])):
+            return "ready"
+    candidates = [root]
+    try:
+        candidates += [
+            entry.path
+            for entry in os.scandir(os.path.join(root, _INDEX_PROFILES_DIR))
+            if entry.is_dir() and not entry.name.startswith(".")
+        ]
+    except OSError:
+        pass
+    return "outdated" if any(_finished_index(path) for path in candidates) else "empty"
+
+
+def library_profile_has_index(root: str) -> bool:
+    """Whether a profile holds a finished index for the current model."""
+    return library_profile_index_state(root) == "ready"

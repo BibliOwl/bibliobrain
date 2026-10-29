@@ -41,6 +41,7 @@ from src.library import (
 )
 from src.llm_provider import public_provider_info
 from src.notebooks import clear_all_notebooks
+from src.rag.progress_stages import StageTracker
 from src.rag_settings import get_persisted_chunk_size, set_persisted_chunk_size
 from src.zotero_db import is_bibtex_source, suggest_zotero_pdf_folder
 
@@ -455,9 +456,10 @@ async def api_init(req: InitRequest):
     _rag_load_running.set()
 
     q: queue.Queue = queue.Queue()
+    stages = StageTracker()
 
     def progress_cb(frac: float, desc: str = ""):
-        q.put({"type": "progress", "frac": round(frac, 3), "desc": desc})
+        q.put(stages.event(frac, desc))
 
     managed_operation_active = application._begin_managed_operation()
 

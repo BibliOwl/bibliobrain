@@ -113,6 +113,28 @@ async function main() {
     await page.waitForFunction(() => document.querySelectorAll('#nb-cg-stage [data-id], #nb-cg-stage .nb-cg-node').length > 0);
     if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'article-graph-built.png') });
 
+    // The wheel zooms by spreading the graph out: the canvas grows, the dots
+    // keep their size, and 100 % brings the stage back to its own size.
+    const stageBox = await page.locator('#nb-cg-stage').boundingBox();
+    const sizeAt = () => page.evaluate(() => ({ w: _nbCg.layout.W, zoom: _nbCg.zoom, r: _nbCg.layout.targets.get('W1').r, stage: _nbCg.stage.w }));
+    const before = await sizeAt();
+    await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height / 2);
+    for (let i = 0; i < 3; i += 1) await page.mouse.wheel(0, -100);
+    await page.waitForFunction(() => _nbCg.zoom > 1.5 && _nbCg.layout.W > _nbCg.stage.w * 1.5);
+    const zoomed = await sizeAt();
+    assert.equal(zoomed.r, before.r);
+    assert.equal(await page.locator('#nb-cg-zoom-reset').isDisabled(), false);
+    assert.match(await page.locator('#nb-cg-zoom-reset').textContent(), /^\d+ %$/);
+    await page.click('#nb-cg-zoom-reset');
+    await page.waitForFunction(() => _nbCg.zoom === 1 && _nbCg.layout.W <= Math.max(_nbCg.stage.w, 520));
+    assert.equal(await page.locator('#nb-cg-zoom-reset').textContent(), '100 %');
+    // Enter in the search box selects the match.
+    await page.fill('#nb-cg-search', 'older classic');
+    await page.press('#nb-cg-search', 'Enter');
+    await page.waitForFunction(() => _nbCg.selectedNodeId === 'W9');
+    assert.equal(await page.locator('#nb-cg-search-count').textContent(), '1 / 1');
+    await page.fill('#nb-cg-search', '');
+
     // The overview keeps the library-wide map; coming back keeps the graph.
     await page.click('[data-cartography-view="library"]');
     assert.equal(await page.locator('#article-graph-workspace').isVisible(), false);

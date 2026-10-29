@@ -7,47 +7,102 @@ function _looksLikeSafeInlineMath(content) {
   if (value.length > 120) return false;
   if (/\[(?:S\d+|[A-Za-z0-9:_\-.]+:\d+)\]/.test(value)) return false;
   if (/[.!?]/.test(value)) return false;
-  const longWordCount = (value.match(/\b[\p{L}]{4,}\b/gu) || []).length;
-  if (longWordCount >= 5) return false;
+  if (_countProseWords(value) >= 5) return false;
   return /\\[A-Za-z]+|[_^{}=<>+\-*/]|(?:\d+\s*[A-Za-z])/.test(value);
 }
 
-function _normalizeSingleDollarMathInText(text) {
+// LaTeX command names (\left, \frac, \right) are not prose words.
+function _countProseWords(value) {
+  const withoutCommands = String(value || '').replace(/\\[A-Za-z]+/g, ' ');
+  return (withoutCommands.match(/\b[\p{L}]{4,}\b/gu) || []).length;
+}
+
+// A longer formula between single dollars: LaTeX commands, no citation
+// marker, no sentence punctuation and almost no prose words.
+function _looksLikeLongDollarFormula(value) {
+  if (value.length > 400) return false;
+  if (!/\\[A-Za-z]+/.test(value)) return false;
+  if (/\[(?:S\d+|[A-Za-z0-9:_\-.]+:\d+)\]/.test(value)) return false;
+  if (/[!?]|\.(?:\s|$)/.test(value)) return false;
+  return _countProseWords(value) < 5;
+}
+
+// A lone symbol between dollars ($n$, $B$, $\alpha$, $T'$) is a variable.
+function _isSingleMathSymbol(content) {
+  return /^(?:[A-Za-z]|[\u0391-\u03A9\u03B1-\u03C9]|\\[A-Za-z]+)['\u2032]?$/u.test(String(content || '').trim());
+}
+
+// Bare parentheses are prose far more often than math, so they only become
+// math with a LaTeX command or a sub/superscript and no prose word left once
+// the commands are removed: "(\rho_{eq})" or "(x_1 + x_2)", never
+// "(par exemple 28 ou 31)" or "(souvent $10^{-4}$ V/m)".
+function _looksLikeBareParenMath(content) {
+  const value = String(content || '').trim();
+  if (!value || value.includes('$') || /\\[()[\]]/.test(value)) return false;
+  if (!/\\[A-Za-z]+|[_^]/.test(value)) return false;
+  const withoutCommands = value
+    .replace(/\\(?:text|mathrm|textrm|operatorname|mathit|mathbf)\s*\{[^{}]*\}/g, ' ')
+    .replace(/\\[A-Za-z]+/g, ' ');
+  if (/[\p{L}]{3,}/u.test(withoutCommands)) return false;
+  return _looksLikeSafeInlineMath(value);
+}
+
+// Single-dollar math follows the usual Markdown/Pandoc rule: no space right
+// after the opening "$" or before the closing one, and no digit right after
+// the closing one, so "$5 et $10" stays a price.
+function _singleDollarInnerIsMath(inner, following) {
+  const value = String(inner || '');
+  if (!value || /^\s|\s$/.test(value)) return false;
+  if (/^\d/.test(String(following || ''))) return false;
+  return _isSingleMathSymbol(value) || _looksLikeSafeInlineMath(value) || _looksLikeLongDollarFormula(value);
+}
+
+function _normalizeBareParenMath(text) {
   let value = String(text || '');
-  value = value.replace(
-    /(^|[^\\])\(([^()\n]{1,120})\)/g,
-    (match, prefix, inner) => {
-      if (!_looksLikeSafeInlineMath(inner)) return match;
-      return `${prefix}\\(${String(inner).trim()}\\)`;
-    },
-  );
-  // Convert double parentheses ((...)) to \(...\) for KaTeX.
   // Some LLMs emit inline math as ((\rho_{eq})) instead of \(\rho_{eq}\).
-  // Only convert when the inner content looks like math (contains backslash commands, subscripts/superscripts, etc.).
   value = value.replace(
-    /(?<!=)\(\((?:(?!\)\)).)+?\)\)(?!\))/g,
-    (match) => {
-      // Extract inner content by stripping outer (( and ))
-      const inner = match.slice(2, -2).trim();
-      if (!_looksLikeSafeInlineMath(inner)) return match;
-      return `\\(${inner}\\)`;
-    },
+    /(?<![=\\])\(\(((?:(?!\)\))[^\n])+?)\)\)(?!\))/g,
+    (match, inner) => (_looksLikeBareParenMath(inner) ? `\\(${String(inner).trim()}\\)` : match),
   );
-  if (!value.includes('$')) return value;
-  const normalizedParenthesized = value.replace(
-    /(^|[^\\$])\(\$(?!\$)([^$\n]{1,400}?)\$\)/g,
-    (match, prefix, inner) => {
-      if (!_looksLikeSafeInlineMath(inner)) return match;
-      return `${prefix}\\(${String(inner).trim()}\\)`;
-    },
+  // Never the delimiter of a sizing command: \left( ... \right).
+  return value.replace(
+    /(^|[^\\(])(?<!\\[A-Za-z]+)\(([^()\n]{1,120})\)/g,
+    (match, prefix, inner) => (
+      _looksLikeBareParenMath(inner) ? `${prefix}\\(${String(inner).trim()}\\)` : match
+    ),
   );
-  return normalizedParenthesized.replace(
-    /(^|[^\\$])\$(?!\$)([^$\n]{1,400}?)\$(?!\$)/g,
-    (match, prefix, inner) => {
-      if (!_looksLikeSafeInlineMath(inner)) return match;
-      return `${prefix}\\(${String(inner).trim()}\\)`;
-    },
-  );
+}
+
+// Math that is already delimited ($$...$$, \(...\), \[...\]) or written
+// between single dollars. Everything outside these spans is prose.
+const _INLINE_MATH_TOKEN_SOURCE = String.raw`(?<!\\)\$\$[\s\S]+?\$\$|(?<!\\)\\\([\s\S]+?\\\)|(?<!\\)\\\[[\s\S]+?\\\]|(?<![\\$])\$(?!\$)([^$\n]{1,400}?)\$(?!\$)`;
+
+function _normalizeSingleDollarMathInText(text) {
+  const value = String(text || '');
+  const tokens = new RegExp(_INLINE_MATH_TOKEN_SOURCE, 'g');
+  let output = '';
+  let last = 0;
+  let match = tokens.exec(value);
+  while (match) {
+    output += _normalizeBareParenMath(value.slice(last, match.index));
+    const inner = match[1];
+    const end = match.index + match[0].length;
+    if (inner == null) {
+      output += match[0];
+      last = end;
+    } else if (_singleDollarInnerIsMath(inner, value.charAt(end))) {
+      output += `\\(${inner.trim()}\\)`;
+      last = end;
+    } else {
+      // Not math: keep the opening "$" and its text, and rescan from the
+      // closing "$", which may open the next real span ("$5 ou $x$").
+      last = match.index + 1 + inner.length;
+      output += _normalizeBareParenMath(value.slice(match.index, last));
+      tokens.lastIndex = last;
+    }
+    match = tokens.exec(value);
+  }
+  return output + _normalizeBareParenMath(value.slice(last));
 }
 
 function _convertHtmlSubSupToLatex(text) {
@@ -1404,30 +1459,33 @@ function normalizeAssistantCitations(text, sources = []) {
       if (!parts.length) return match;
 
       const normalized = [];
-      let sawCitationLikePart = false;
+      // A citation that matches no source stays visible as plain text:
+      // deleting it hid what the model wrote.
+      const unknown = [];
       for (const part of parts) {
         const label = normalizeAssistantCitationLabel(part);
         if (!label) {
-          if (isAssistantCitationLikePart(part)) {
-            sawCitationLikePart = true;
-            continue;
-          }
-          normalized.push(part);
+          if (isAssistantCitationLikePart(part)) unknown.push(part);
+          else normalized.push(part);
           continue;
         }
-        sawCitationLikePart = true;
         const source = sourceMap.get(label);
         if (!source) {
+          unknown.push(part);
           continue;
         }
-        normalized.push(String(source?.ref_label || label).trim().toUpperCase() || label);
+        const explicit = String(source?.ref_label || '').trim().toUpperCase();
+        // Notebook sources are numbered 1..N with no label of their own, so
+        // a model that writes [S2] means source 2: show it as [2].
+        const sourceNumber = label.match(/^S(\d+)$/);
+        const notebookNumber = !explicit && sourceNumber
+          && sourceRefLabel(source, sourceNumber[1]) === sourceNumber[1];
+        normalized.push(explicit || (notebookNumber ? sourceNumber[1] : label));
       }
 
-      if (!normalized.length) {
-        return sawCitationLikePart ? '' : match;
-      }
       if (!normalized.some((part) => normalizeAssistantCitationLabel(part))) return match;
-      return `[${normalized.join(', ')}]`;
+      const known = `[${normalized.join(', ')}]`;
+      return unknown.length ? `${known} [${unknown.join(', ')}]` : known;
     });
   }
 

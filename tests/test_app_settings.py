@@ -186,7 +186,7 @@ def test_app_settings_falls_back_when_json_is_invalid(workspace_tmp_dir: Path) -
     payload = app_settings.get_app_settings()
 
     assert payload["threshold"] == 0.3
-    assert payload["max_chunks"] == 6
+    assert payload["max_chunks"] == 8
     assert payload["discovery_query_planner"] is False
     assert payload["discovery_candidate_multiplier"] == 4
     assert payload["discovery_llm_validation_multiplier"] == 3

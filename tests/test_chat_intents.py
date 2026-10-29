@@ -456,3 +456,52 @@ def test_question_may_need_visuals_for_figure_questions(message: str) -> None:
 ])
 def test_question_may_need_visuals_skips_text_questions(message: str) -> None:
     assert question_may_need_visuals(message) is False
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("résume moi ces pdf", True),
+        ("Résume-moi ces articles en quelques lignes", True),
+        ("de quoi parlent ces documents ?", True),
+        ("Can you summarize these papers briefly?", True),
+        # Codex audit BB-05: format and citation instructions are not a topic.
+        ("Résume-moi ces PDF, un paragraphe par article du carnet, et cite chacun", True),
+        ("Résume ces articles en liste à puces, deux phrases chacun, avec leurs références", True),
+        ("Summarize these papers, one paragraph per paper, and cite each one", True),
+        ("résume ces PDF sur le quench", False),
+        ("résume ces PDF, un paragraphe sur le quench du carnet", False),
+        ("Summarize these papers on AC losses, one paragraph each", False),
+        ("résume les résultats sur le courant critique", False),
+        ("synthèse sur les pertes AC", False),
+        ("quelle est la température critique", False),
+    ],
+)
+def test_selection_summary_request_is_a_bare_summary(message: str, expected: bool) -> None:
+    from src.chat_intents import is_selection_summary_request
+
+    assert is_selection_summary_request(message) is expected
+
+
+@pytest.mark.parametrize("message", [
+    # Codex audit BB-04: the papers are where to look, not what to list.
+    "Liste les méthodes de modélisation des pertes AC utilisées dans les articles de ma "
+    "bibliothèque, avec une citation par méthode.",
+    "Liste tous les matériaux étudiés dans les articles de ma bibliothèque",
+    "List the methods used in the papers of my library",
+    "List all the models described in the papers of my library, with one citation each",
+    "Liste les résultats des articles de Moreau",
+])
+def test_listing_things_found_in_papers_is_not_a_paper_list(message: str) -> None:
+    assert detect_chat_intent(message).mode == "rag"
+
+
+@pytest.mark.parametrize("message", [
+    "Liste les articles sur les pertes AC",
+    "Liste-moi tous les 10 derniers articles sur le quench",
+    "List all the papers on AC losses in my library",
+    "Show me all the most recent papers on screening currents",
+    "Liste toutes les publications de ma bibliothèque sur le REBCO",
+])
+def test_listing_papers_is_still_a_paper_list(message: str) -> None:
+    assert detect_chat_intent(message).mode == "paper_list"

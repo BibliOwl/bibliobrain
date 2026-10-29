@@ -402,6 +402,18 @@
                   <button type="button" data-bb-static-onclick="apply-chat-hint-latex" data-i18n="chat.hintLatex">LaTeX</button>
                 </div>
               </div>
+              <section class="chat-article-search" aria-labelledby="chat-article-search-label">
+                <label id="chat-article-search-label" for="chat-article-search" data-i18n="chat.articleSearchLabel">Filtrer par article</label>
+                <div class="chat-article-search-field">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input type="search" id="chat-article-search" autocomplete="off" spellcheck="false"
+                         placeholder="Titre, auteur ou année…" data-i18n-placeholder="chat.articleSearchPlaceholder"
+                         aria-describedby="chat-article-search-status" aria-controls="chat-article-search-results"
+                         data-bb-static-oninput="search-chat-articles">
+                </div>
+                <p id="chat-article-search-status" role="status" data-i18n="chat.articleSearchHint">Cherchez un titre ou un auteur pour limiter les prochaines réponses à un article.</p>
+                <div id="chat-article-search-results" data-i18n-skip hidden></div>
+              </section>
               <details id="chat-filters-panel" class="chat-filters-panel" hidden>
                 <summary>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
@@ -434,6 +446,13 @@
               </button>
             </div>
           </div>
+
+          <button type="button" id="chat-notebook-btn" class="composer-options-btn" data-bb-static-onclick="pick-chat-notebook"
+                  aria-haspopup="dialog" aria-pressed="false" title="Limiter les questions aux articles d’un carnet"
+                  data-i18n-title="chat.notebookScopeTitle">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span data-i18n="chat.notebookScopeButton">Carnet</span>
+          </button>
 
           <div class="composer-spacer"></div>
           <div id="chat-depth" class="chat-depth" role="group" aria-label="Profondeur de recherche" data-i18n-aria-label="chat.depthGroupAria">
@@ -1891,6 +1910,71 @@
         </details>
       </div>
 
+      <div class="settings-section settings-card" id="settings-index-selection">
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <span class="settings-row-title" data-i18n="indexSelection.title">Ce que Bibliobrain lit</span>
+            <span class="settings-row-desc" data-i18n="indexSelection.descSimple">Par défaut, tout le dossier ci-dessus, sous-dossiers compris.</span>
+          </div>
+          <div class="settings-control">
+            <select id="library-profile-select" aria-label="Bibliothèque active" data-i18n-aria-label="libraryProfiles.title" hidden></select>
+            <span class="index-selection-summary" id="index-selection-summary" role="status" aria-live="polite" data-i18n-skip></span>
+          </div>
+        </div>
+        <div class="library-profile-status" id="library-profile-status" role="status" aria-live="polite" hidden>
+          <span id="library-profile-status-text" data-i18n-skip></span>
+          <button class="btn btn-cyan" type="button" id="library-profile-build" data-i18n="libraryProfiles.build" hidden>Préparer cette bibliothèque</button>
+        </div>
+        <div class="library-profile-status" id="index-selection-pending" role="status" aria-live="polite" hidden>
+          <span id="index-selection-pending-text" data-i18n-skip></span>
+          <button class="btn btn-green" type="button" id="index-selection-reload" data-i18n="indexSelection.reloadNow">Recharger maintenant</button>
+        </div>
+
+        <details class="settings-details" id="index-selection-options">
+          <summary data-i18n="indexSelection.optionsTitle">Options : ne lire qu’une partie, bibliothèques séparées</summary>
+          <div class="index-selection-options">
+            <p class="index-selection-note" data-i18n="indexSelection.desc">Choisissez les collections ou les dossiers à préparer. Les autres ne sont pas lus : ils n’apparaissent ni dans la Bibliothèque ni dans les réponses, et vos fichiers restent en place.</p>
+
+            <div class="index-selection-block" id="index-selection-collections" hidden>
+              <fieldset class="index-selection-modes">
+                <legend data-i18n="indexSelection.collectionsTitle">Collections Zotero</legend>
+                <label class="index-selection-mode"><input type="radio" name="index-selection-mode" value="all"> <span data-i18n="indexSelection.modeAll">Toute la bibliothèque</span></label>
+                <label class="index-selection-mode"><input type="radio" name="index-selection-mode" value="include"> <span data-i18n="indexSelection.modeInclude">Seulement les collections cochées</span></label>
+                <label class="index-selection-mode"><input type="radio" name="index-selection-mode" value="exclude"> <span data-i18n="indexSelection.modeExclude">Tout sauf les collections cochées</span></label>
+              </fieldset>
+              <div class="index-selection-list" id="index-selection-collection-list" role="group" aria-label="Collections Zotero" data-i18n-aria-label="indexSelection.collectionsTitle" hidden data-i18n-skip></div>
+            </div>
+
+            <div class="index-selection-block" id="index-selection-folders" hidden>
+              <span class="index-selection-heading" data-i18n="indexSelection.foldersTitle">Sous-dossiers à ignorer</span>
+              <div class="index-selection-list" id="index-selection-folder-list" role="group" aria-label="Sous-dossiers à ignorer" data-i18n-aria-label="indexSelection.foldersTitle" data-i18n-skip></div>
+            </div>
+
+            <div class="index-selection-block" id="index-selection-large">
+              <span class="index-selection-heading" data-i18n="indexSelection.largeTitle">Très gros fichiers</span>
+              <label class="index-selection-size" for="index-selection-max-mb">
+                <span data-i18n="indexSelection.maxSizeBefore">Ignorer les fichiers de plus de</span>
+                <input type="number" id="index-selection-max-mb" min="0" max="10000" step="10" inputmode="numeric">
+                <span data-i18n="indexSelection.maxSizeAfter">Mo (0 = aucune limite)</span>
+              </label>
+              <ul class="index-selection-files" id="index-selection-large-list" data-i18n-skip></ul>
+            </div>
+
+            <div class="index-selection-block" id="library-profile-row">
+              <span class="index-selection-heading" data-i18n="libraryProfiles.sectionTitle">Bibliothèques séparées</span>
+              <p class="index-selection-note" data-i18n="libraryProfiles.desc">Créez une bibliothèque par sujet, par exemple HTS ou Nb3Sn. Chacune a son propre index : il ne contient que ce qu’elle lit, il est donc plus rapide à préparer.</p>
+              <div class="btn-row">
+                <button class="btn btn-ghost" type="button" id="library-profile-new" data-i18n="libraryProfiles.new">Nouvelle…</button>
+                <button class="btn btn-ghost" type="button" id="library-profile-rename" data-i18n="libraryProfiles.rename">Renommer…</button>
+                <button class="btn btn-ghost" type="button" id="library-profile-delete" data-i18n="libraryProfiles.delete">Supprimer</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <div class="settings-save-feedback" id="index-selection-feedback" role="status" aria-live="polite" hidden></div>
+      </div>
+
       <div class="settings-section settings-card">
         <div class="settings-row">
           <div class="settings-row-info">
@@ -2282,6 +2366,23 @@
           </div>
         </div>
       </div>
+
+      <div class="settings-section settings-card">
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <span class="settings-row-title" data-i18n="settings.performanceMode">Profil de performance</span>
+            <span class="settings-row-desc" data-i18n="settings.performanceModeDesc">Réduit uniquement les effets visuels et la fréquence des rendus. Le RAG et les réponses restent inchangés.</span>
+          </div>
+          <div class="settings-control">
+            <select id="performance-mode-select" aria-label="Profil de performance" data-i18n-aria-label="settings.performanceMode" data-bb-static-onchange="set-performance-mode">
+              <option value="auto" data-i18n="settings.performanceAuto">Automatique</option>
+              <option value="normal" data-i18n="settings.performanceNormal">Normal</option>
+              <option value="light" data-i18n="settings.performanceLight">Léger</option>
+            </select>
+            <div id="performance-mode-status" class="settings-status status-cyan" style="display:block;margin-top:6px"></div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="settings-pane" id="settings-pane-expert-generation" data-settings-mode="expert">
@@ -2401,7 +2502,7 @@
       <div class="settings-section">
         <div class="settings-section-heading">
           <div class="settings-section-label" data-i18n="settings.vectorSearch">Recherche dans vos documents</div>
-          <button class="btn btn-ghost btn-small settings-section-reset-btn" id="research-settings-reset-btn" type="button" data-i18n="settings.resetRecommendedValues" data-i18n-title="settings.resetResearchValuesTitle" title="Rétablir les valeurs recommandées (0,30 · 6 chunks · reranker actif · 1000 caractères)">Réinitialiser</button>
+          <button class="btn btn-ghost btn-small settings-section-reset-btn" id="research-settings-reset-btn" type="button" data-i18n="settings.resetRecommendedValues" data-i18n-title="settings.resetResearchValuesTitle" title="Rétablir les valeurs recommandées (0,30 · 8 chunks · longueur Auto · reranker actif · 1000 caractères)">Réinitialiser</button>
         </div>
         <div class="settings-section-note" data-i18n="settings.vectorSearchNote">Les valeurs recommandées conviennent pour commencer. Personnalisez-les seulement si nécessaire.</div>
         <p class="settings-default-summary" id="settings-retrieval-summary" role="status"></p>
@@ -2423,15 +2524,30 @@
         <div class="settings-row">
           <div class="settings-row-info">
             <span class="settings-row-title" data-i18n="settings.maxChunks">Nombre maximal de passages</span>
-            <span class="settings-row-desc" data-i18n="settings.maxChunksDesc">Limite les passages envoyes au LLM. Reduire si le contexte est trop long.</span>
+            <span class="settings-row-desc" data-i18n="settings.maxChunksDesc">Passages envoyes au LLM pour chaque question (12 au plus). Plus de passages = reponses plus completes, mais plus lentes.</span>
           </div>
           <div class="settings-control">
             <div class="slider-with-val">
-              <input type="range" id="max-chunks" aria-label="Nombre maximum de chunks" min="1" max="20" step="1" value="6"
+              <input type="range" id="max-chunks" aria-label="Nombre maximum de chunks" min="1" max="12" step="1" value="8"
                      data-bb-static-oninput="show-max-chunks-val">
-              <span class="slider-pill" id="max-chunks-val">6</span>
+              <span class="slider-pill" id="max-chunks-val">8</span>
             </div>
-            <div class="slider-ticks"><span>1</span><span>5</span><span>10</span><span>15</span><span>20</span></div>
+            <div class="slider-ticks"><span>1</span><span>3</span><span>6</span><span>9</span><span>12</span></div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-info">
+            <span class="settings-row-title" data-i18n="settings.chatAnswerLength">Longueur des reponses</span>
+            <span class="settings-row-desc" data-i18n="settings.chatAnswerLengthDesc">Auto : la longueur suit la question (définition ou valeur : concise ; pourquoi, comment, comparaison : détaillée). Concise : 1 ou 2 paragraphes. Standard : 2 à 4 paragraphes, les meilleurs passages sont lus avec leur contexte. Détaillée : 4 à 7 paragraphes et au moins 10 passages. Une liste donne toujours tous les éléments trouvés ; la longueur règle le détail de chacun.</span>
+          </div>
+          <div class="settings-control">
+            <select id="chat-answer-length" class="input" style="width:100%" aria-label="Longueur des réponses">
+              <option value="auto" data-i18n="settings.chatAnswerLengthAuto" selected>Auto</option>
+              <option value="concise" data-i18n="settings.chatAnswerLengthConcise">Concise</option>
+              <option value="standard" data-i18n="settings.chatAnswerLengthStandard">Standard</option>
+              <option value="detailed" data-i18n="settings.chatAnswerLengthDetailed">Détaillée</option>
+            </select>
           </div>
         </div>
 
@@ -3086,21 +3202,6 @@
             </label>
           </div>
         </div>
-
-        <div class="settings-row" data-debug-only="grid" style="display:none">
-          <div class="settings-row-info">
-            <span class="settings-row-title" data-i18n="settings.performanceMode">Profil de performance</span>
-            <span class="settings-row-desc" data-i18n="settings.performanceModeDesc">Réduit uniquement les effets visuels et la fréquence des rendus. Le RAG et les réponses restent inchangés.</span>
-          </div>
-          <div class="settings-control">
-            <select id="performance-mode-select" aria-label="Profil de performance" data-i18n-aria-label="settings.performanceMode" data-bb-static-onchange="set-performance-mode">
-              <option value="auto" data-i18n="settings.performanceAuto">Automatique</option>
-              <option value="normal" data-i18n="settings.performanceNormal">Normal</option>
-              <option value="light" data-i18n="settings.performanceLight">Léger</option>
-            </select>
-            <div id="performance-mode-status" class="settings-status status-cyan" style="display:block;margin-top:6px"></div>
-          </div>
-        </div>
       </div>
       <div class="settings-section">
         <div class="settings-section-label" data-i18n="settings.maintenance">Maintenance</div>
@@ -3240,6 +3341,12 @@
           <button type="button" class="btn btn-ghost" id="startup-detect-library-btn" data-bb-static-onclick="detect-startup-library" data-i18n="startup.detectZoteroAgain" hidden>Relancer la détection</button>
         </div>
       </details>
+      <details id="startup-index-selection" class="startup-advanced">
+        <summary class="disclosure" data-i18n="startup.indexSelection">Ne lire qu’une partie du dossier</summary>
+        <p class="startup-help-note" data-i18n="startup.indexSelectionHelp">Facultatif. Écartez des collections Zotero, des sous-dossiers ou les très gros fichiers avant la première préparation. Vous pourrez changer d’avis dans les Réglages.</p>
+        <p class="startup-help-note startup-index-selection-summary" id="startup-index-selection-summary" role="status" aria-live="polite" data-i18n-skip></p>
+        <div id="startup-index-selection-slot"></div>
+      </details>
       <label class="startup-update-choice" id="startup-online-metadata-choice">
         <input type="checkbox" id="startup-online-metadata">
         <span data-i18n="startup.onlineMetadata">Chercher en ligne les titres, auteurs et DOI manquants (Crossref, OpenAlex : seuls le titre ou le DOI sont envoyés, jamais vos PDF)</span>
@@ -3332,9 +3439,15 @@ ollama serve</pre>
       <div id="nb-cg-topbar" hidden>
         <label id="nb-cg-search-wrap">
           <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4.5 4.5"></path></svg>
-          <input type="search" id="nb-cg-search" aria-label="Rechercher un auteur ou un titre" data-i18n-aria-label="citationGraph.searchAria" placeholder="Auteur ou titre…" data-i18n-placeholder="citationGraph.searchPlaceholder" autocomplete="off">
+          <input type="search" id="nb-cg-search" aria-label="Rechercher un auteur ou un titre" data-i18n-aria-label="citationGraph.searchAria" placeholder="Auteur ou titre…" data-i18n-placeholder="citationGraph.searchPlaceholder" title="Entrée : aller au résultat suivant" data-i18n-title="citationGraph.searchHint" autocomplete="off">
+          <span id="nb-cg-search-count" aria-live="polite" hidden data-i18n-skip></span>
         </label>
         <span id="nb-cg-legend-text" data-i18n-skip></span>
+        <div id="nb-cg-zoom" role="group" aria-label="Zoom du graphe" data-i18n-aria-label="citationGraph.zoomAria" title="Molette : zoomer · glisser le fond : se déplacer" data-i18n-title="citationGraph.zoomHint">
+          <button type="button" id="nb-cg-zoom-out" aria-label="Dézoomer" data-i18n-aria-label="citationGraph.zoomOut" disabled>−</button>
+          <button type="button" id="nb-cg-zoom-reset" aria-label="Revenir à 100 %" data-i18n-aria-label="citationGraph.zoomReset" disabled data-i18n-skip>100 %</button>
+          <button type="button" id="nb-cg-zoom-in" aria-label="Zoomer" data-i18n-aria-label="citationGraph.zoomIn">+</button>
+        </div>
       </div>
       <div id="nb-cg-tooltip" role="tooltip" hidden data-i18n-skip></div>
       <div id="nb-cg-empty" hidden></div>
@@ -3514,6 +3627,7 @@ ollama serve</pre>
 <script src="/static/js/app/bug-reports.js?v=auto"></script>
 <script src="/static/js/app/updates.js?v=auto"></script>
 <script src="/static/js/app/settings-panel.js?v=auto"></script>
+<script src="/static/js/app/index-selection.js?v=auto"></script>
 <script src="/static/js/app/library.js?v=auto"></script>
 <script src="/static/js/app/library-drop.js?v=auto"></script>
 <script src="/static/js/app/drafting.js?v=auto"></script>

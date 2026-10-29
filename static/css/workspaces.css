@@ -442,6 +442,7 @@ dialog#nb-create-form #nb-new-title, dialog#nb-create-form #nb-zotero-collection
 .discovery-notebook-dialog h3 { margin: 0; font-size: 1rem; }
 .discovery-notebook-dialog-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; max-height: 50vh; overflow-y: auto; }
 .discovery-notebook-choice { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--glass-1); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.discovery-notebook-choice.is-current { border-color: var(--accent-border); }
 .discovery-notebook-choice:hover { border-color: var(--accent-border); background: var(--accent-soft); }
 .discovery-notebook-choice span, .discovery-notebook-dialog-empty { font-size: 0.8rem; color: var(--muted); }
 .discovery-notebook-new { display: grid; grid-template-columns: minmax(0, 1fr); }

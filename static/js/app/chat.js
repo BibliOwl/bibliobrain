@@ -105,21 +105,142 @@ function toggleComposerMenu(buttonId, menuId, render = null) {
 
 function toggleChatOptions() {
   toggleComposerMenu('chat-options-btn', 'chat-options-menu');
+  if (!document.getElementById('chat-options-menu')?.hidden) loadChatArticleSearch();
 }
 
-// "Options · 1" while a Zotero filter or the figure reading is on.
+// Count active source filters and figure reading.
 function updateChatOptionsCount() {
   const counter = document.getElementById('chat-options-count');
   if (!counter) return;
   const filled = ['chat-tags-filter', 'chat-collections-filter']
     .filter((id) => String(document.getElementById(id)?.value || '').trim()).length;
-  const count = filled + (state.chatForceVisualOnce ? 1 : 0);
+  const count = filled + (_chatArticleScopePaths().length ? 1 : 0)
+    + (state.chatForceVisualOnce ? 1 : 0);
   counter.hidden = !count;
   counter.textContent = count ? ` · ${count}` : '';
   document.getElementById('chat-options-btn')?.classList.toggle('is-active', count > 0);
 }
 window.closeComposerMenu = closeComposerMenu;
 window.updateChatOptionsCount = updateChatOptionsCount;
+
+let _chatArticleSearchItems = [];
+let _chatArticleSearchRevision = 0;
+let _chatArticleSearchStatus = '';
+
+async function loadChatArticleSearch() {
+  const revision = ++_chatArticleSearchRevision;
+  _chatArticleSearchItems = [];
+  _chatArticleSearchStatus = 'chat.articleSearchLoading';
+  renderChatArticleSearch();
+  try {
+    const data = await fetchAllPaginated('/api/library?indexed_only=true', ['rows', 'paths', 'metadata'], {
+      limit: 1000,
+      fallback: _ti('chat.articleSearchError'),
+    });
+    if (revision !== _chatArticleSearchRevision) return;
+    _chatArticleSearchItems = data.paths.flatMap((path, index) => {
+      const row = data.rows[index];
+      if (!path || !Array.isArray(row) || data.metadata[index]?.rag_excluded) return [];
+      return [{ path: String(path), title: String(row[0] || path), author: row[1], year: row[2] }];
+    });
+    _chatArticleSearchStatus = '';
+  } catch {
+    if (revision !== _chatArticleSearchRevision) return;
+    _chatArticleSearchStatus = 'chat.articleSearchError';
+  }
+  renderChatArticleSearch();
+}
+
+// Case- and accent-insensitive form of a string, one entry per source
+// character so a match can be mapped back for highlighting.
+function _chatArticleFold(value) {
+  return Array.from(String(value || ''), (char) => char.normalize('NFD')
+    .replace(/\p{M}/gu, '').toLocaleLowerCase());
+}
+
+// Append text to a node with every search term wrapped in <mark>.
+function _appendChatArticleHighlight(node, text, terms) {
+  const source = Array.from(String(text || ''));
+  const folded = _chatArticleFold(text);
+  const flat = folded.join('');
+  const owner = folded.flatMap((part, index) => Array(part.length).fill(index));
+  const marked = new Array(source.length).fill(false);
+  terms.forEach((term) => {
+    let at = flat.indexOf(term);
+    while (at >= 0) {
+      for (let i = at; i < at + term.length; i += 1) marked[owner[i]] = true;
+      at = flat.indexOf(term, at + term.length);
+    }
+  });
+  let run = '';
+  let runMarked = false;
+  const flush = () => {
+    if (!run) return;
+    if (runMarked) {
+      const mark = document.createElement('mark');
+      mark.textContent = run;
+      node.appendChild(mark);
+    } else {
+      node.appendChild(document.createTextNode(run));
+    }
+    run = '';
+  };
+  source.forEach((char, index) => {
+    if (marked[index] !== runMarked) {
+      flush();
+      runMarked = marked[index];
+    }
+    run += char;
+  });
+  flush();
+}
+
+function renderChatArticleSearch() {
+  const input = document.getElementById('chat-article-search');
+  const results = document.getElementById('chat-article-search-results');
+  const status = document.getElementById('chat-article-search-status');
+  if (!input || !results || !status) return;
+  const normalize = (value) => _chatArticleFold(value).join('');
+  const terms = normalize(input.value).trim().split(/\s+/).filter(Boolean);
+  results.replaceChildren();
+  results.hidden = !terms.length;
+  if (_chatArticleSearchStatus || !terms.length) {
+    status.dataset.i18n = _chatArticleSearchStatus || 'chat.articleSearchHint';
+    status.textContent = _ti(status.dataset.i18n);
+    return;
+  }
+  // Every word must appear in the title, the authors or the year; papers
+  // whose title holds every word come first.
+  const matches = _chatArticleSearchItems.flatMap((item) => {
+    const title = normalize(item.title);
+    const haystack = `${title} ${normalize(item.author)} ${normalize(item.year)}`;
+    if (!terms.every((term) => haystack.includes(term))) return [];
+    return [{ item, inTitle: terms.every((term) => title.includes(term)) }];
+  }).sort((a, b) => Number(b.inTitle) - Number(a.inTitle)).map(({ item }) => item);
+  status.dataset.i18n = matches.length > 20 ? 'chat.articleSearchRefine'
+    : matches.length ? 'chat.articleSearchSelect' : 'chat.articleSearchEmpty';
+  status.textContent = _ti(status.dataset.i18n);
+  matches.slice(0, 20).forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chat-article-search-result';
+    button.title = item.path;
+    const title = document.createElement('strong');
+    _appendChatArticleHighlight(title, item.title, terms);
+    const meta = document.createElement('span');
+    const metaText = [item.author, item.year].filter((value) => value && value !== '-').join(' · ');
+    _appendChatArticleHighlight(meta, metaText || item.path, terms);
+    button.append(title, meta);
+    button.addEventListener('click', () => {
+      setChatArticleScope(item.path, item.title);
+      input.value = '';
+      renderChatArticleSearch();
+      closeComposerMenu();
+      document.getElementById('msg-input')?.focus();
+    });
+    results.appendChild(button);
+  });
+}
 
 function applyChatHint(text, hintAction = '') {
   const input = document.getElementById('msg-input');
@@ -296,7 +417,10 @@ function collectSourceLabelAliases(source, fallbackIndex = 1) {
   addLabel(source?.chat_ref_label);
   addLabel(source?.ref_label);
   addLabel(source?.raw_ref_label);
-  addLabel(sourceRefLabel(source, fallbackIndex));
+  const refLabel = sourceRefLabel(source, fallbackIndex);
+  addLabel(refLabel);
+  // Notebook sources are cited [2], but models often write [S2].
+  if (/^\d+$/.test(refLabel)) labels.add(`S${refLabel}`);
 
   const hasExplicitLabel = Boolean(
     String(source?.chat_ref_label || source?.ref_label || source?.raw_ref_label || '').trim()
@@ -832,6 +956,10 @@ function _chatSourcesPanelEl() {
   if (panel) return panel;
   const layout = document.getElementById('chat-layout');
   if (!layout) return null;
+  const backdrop = document.createElement('div');
+  backdrop.id = 'chat-sources-backdrop';
+  backdrop.setAttribute('aria-hidden', 'true');
+  layout.appendChild(backdrop);
   panel = document.createElement('aside');
   panel.id = 'chat-sources-panel';
   panel.hidden = true;
@@ -862,6 +990,13 @@ function _chatSourcesPanelEl() {
     }
   });
   layout.appendChild(panel);
+  // Capture outside clicks even when a conversation control stops bubbling.
+  // The opening click has already passed this phase, so it keeps the panel open.
+  document.addEventListener('click', (event) => {
+    if (panel.hidden || !window.matchMedia('(max-width: 1180px)').matches) return;
+    if (panel.contains(event.target)) return;
+    closeChatSourcesPanel({ restoreFocus: event.target === backdrop });
+  }, true);
   return panel;
 }
 
@@ -2015,15 +2150,17 @@ function _articleScopeFromMessages(messages) {
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     const meta = rows[i]?.meta;
     if (!meta || !Object.prototype.hasOwnProperty.call(meta, 'article_path')) continue;
-    if (meta.article_scope_once === true) return { path: '', title: '', once: false, paths: [] };
+    if (meta.article_scope_once === true) return { path: '', title: '', once: false, paths: [], notebook: null };
+    const notebookId = String(meta.article_scope_notebook_id || '').trim();
     return {
       path: String(meta.article_path || '').trim(),
       title: String(meta.article_title || '').trim(),
       once: false,
       paths: Array.isArray(meta.article_paths) ? meta.article_paths : [],
+      notebook: notebookId ? { id: notebookId, title: String(meta.article_title || '').trim() } : null,
     };
   }
-  return { path: '', title: '', once: false, paths: [] };
+  return { path: '', title: '', once: false, paths: [], notebook: null };
 }
 
 function _chatArticleScopePaths(scope = state.chatArticleScope) {
@@ -2033,6 +2170,7 @@ function _chatArticleScopePaths(scope = state.chatArticleScope) {
 }
 
 function renderChatArticleScope() {
+  updateChatOptionsCount();
   const banner = document.getElementById('chat-article-scope');
   const labelEl = document.getElementById('chat-article-scope-label');
   const titleEl = document.getElementById('chat-article-scope-title');
@@ -2040,20 +2178,32 @@ function renderChatArticleScope() {
   const paths = _chatArticleScopePaths();
   const path = paths.length === 1 ? paths[0] : '';
   const titles = Array.isArray(state.chatArticleScope?.titles) ? state.chatArticleScope.titles : [];
-  const title = paths.length > 1
+  const notebook = state.chatArticleScope?.notebook || null;
+  const title = notebook
+    ? _ti('chat.notebookScopeName', { title: notebook.title || _tr('Sans titre'), count: paths.length })
+    : paths.length > 1
     ? _ti('chat.articleScopeCount', { count: paths.length })
     : String(state.chatArticleScope?.title || '').trim() || path.split(/[\\/]/).pop() || path;
   const once = Boolean(state.chatArticleScope?.once);
   if (banner) banner.hidden = !paths.length;
   if (labelEl) {
-    labelEl.textContent = _tr(once ? 'Prochaine question limitée à' : 'Questions limitées à');
+    labelEl.textContent = notebook && !once
+      ? _ti('chat.notebookScopeLabel')
+      : _tr(once ? 'Prochaine question limitée à' : 'Questions limitées à');
+  }
+  const notebookBtn = document.getElementById('chat-notebook-btn');
+  if (notebookBtn) {
+    notebookBtn.classList.toggle('is-active', Boolean(notebook && paths.length));
+    notebookBtn.setAttribute('aria-pressed', notebook && paths.length ? 'true' : 'false');
   }
   if (titleEl) {
     titleEl.textContent = title;
     titleEl.title = paths.length > 1 ? (titles.length ? titles : paths).join('\n') : path;
   }
   if (input) {
-    input.placeholder = paths.length > 1
+    input.placeholder = notebook && paths.length
+      ? _ti('chat.notebookInputPlaceholder')
+      : paths.length > 1
       ? _ti('chat.articlesInputPlaceholder')
       : path
       ? _ti('chat.articleInputPlaceholder')
@@ -2076,6 +2226,9 @@ function setChatArticleScope(articlePath, articleTitle = '', options = {}) {
     once: Boolean(options.once),
     paths: paths.length > 1 ? paths : [],
     titles: paths.length > 1 && Array.isArray(options.titles) ? options.titles : [],
+    notebook: options.notebook?.id
+      ? { id: String(options.notebook.id), title: String(options.notebook.title || '').trim() }
+      : null,
   };
   state.chatArticleScopeRevision += 1;
   renderChatArticleScope();
@@ -2100,7 +2253,74 @@ function clearChatArticleScope() {
 
 function restoreChatArticleScope(messages) {
   const scope = _articleScopeFromMessages(messages);
-  setChatArticleScope(scope.path, scope.title, { once: scope.once, paths: scope.paths });
+  setChatArticleScope(scope.path, scope.title, { once: scope.once, paths: scope.paths, notebook: scope.notebook });
+}
+
+// Limits the chat to the PDFs of a notebook. Text sources (typed or pasted
+// by hand) have no library file and stay out.
+async function openChatNotebookPicker() {
+  const dialog = _discoveryNotebookDialog();
+  const list = dialog.querySelector('#discovery-notebook-dialog-list');
+  dialog.querySelector('#discovery-notebook-dialog-title').textContent = _ti('chat.pickNotebook');
+  dialog.querySelector('[data-discovery-dialog-cancel]').textContent = _ti('notebooks.cancel');
+  list.innerHTML = `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('drafting.notebookLoading'))}</p>`;
+  if (!dialog.open) dialog.showModal();
+  let notebooks = [];
+  try {
+    const d = await fetchAllPaginated('/api/notebooks', ['notebooks'], { limit: 500 });
+    notebooks = Array.isArray(d?.notebooks) ? d.notebooks : [];
+  } catch (_) { notebooks = []; }
+  if (!notebooks.length) {
+    list.innerHTML = `<p class="discovery-notebook-dialog-empty">${escapeHtml(_ti('chat.noNotebookToUse'))}</p>`;
+    return;
+  }
+  const activeId = String(state.chatArticleScope?.notebook?.id || '');
+  list.innerHTML = notebooks.map((notebook) => `
+    <button type="button" class="discovery-notebook-choice${String(notebook.id) === activeId ? ' is-current' : ''}" ${bindBbHandler('click', function() {
+      void useNotebookInChat(notebook.id);
+    })}>
+      <strong>${escapeHtml(notebook.title || _tr('Sans titre'))}</strong>
+      <span>${escapeHtml(_ti('notebooks.sourceCount', { count: Number(notebook.source_count) || 0 }))}</span>
+    </button>`).join('');
+}
+
+async function useNotebookInChat(notebookId) {
+  document.getElementById('discovery-notebook-dialog')?.close();
+  let notebook = null;
+  try {
+    const response = await fetch('/api/notebooks/' + encodeURIComponent(notebookId), { cache: 'no-store' });
+    if (response.ok) notebook = await response.json();
+  } catch (_) { notebook = null; }
+  if (!notebook) {
+    showToast(_ti('chat.notebookLoadFailed'), 4000, 'error');
+    return;
+  }
+  const title = String(notebook.title || '').trim() || _tr('Sans titre');
+  const sources = Array.isArray(notebook.sources) ? notebook.sources : [];
+  const seen = new Set();
+  const articles = [];
+  for (const source of sources) {
+    const path = String(source?.source_path || '').trim();
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    articles.push({ path, title: String(source.title || path) });
+  }
+  if (!articles.length) {
+    showToast(_ti('chat.notebookNoPdf', { title }), 6000, 'error');
+    return;
+  }
+  // Matches ChatRequest.article_paths max_length on the server.
+  const kept = articles.slice(0, 200);
+  setChatArticleScope('', title, {
+    paths: kept.map((item) => item.path),
+    titles: kept.map((item) => item.title),
+    notebook: { id: String(notebook.id || notebookId), title },
+  });
+  const textSources = sources.filter((source) => !String(source?.source_path || '').trim()).length;
+  if (textSources || articles.length > kept.length) {
+    showToast(_ti('chat.notebookScopePartial', { count: kept.length, skipped: textSources + articles.length - kept.length }), 6000);
+  }
+  document.getElementById('msg-input')?.focus();
 }
 
 function isLocalOllamaProvider() {
@@ -2447,6 +2667,7 @@ async function sendMessage(options = {}) {
     title: String(state.chatArticleScope?.title || '').trim(),
     once: Boolean(state.chatArticleScope?.once),
     paths: _chatArticleScopePaths(),
+    notebookId: String(state.chatArticleScope?.notebook?.id || ''),
   };
   const articleScopeRevisionAtStart = state.chatArticleScopeRevision;
   if (!model) return;
@@ -2541,6 +2762,7 @@ async function sendMessage(options = {}) {
         article_title: articleScope.title,
         article_paths: articleScope.paths.length > 1 ? articleScope.paths : [],
         article_scope_once: articleScope.once,
+        article_scope_notebook_id: articleScope.notebookId,
         depth: getChatDepth(),
         hint_action: hintAction,
         force_visual_analysis: forceVisualAnalysis,
@@ -2569,6 +2791,15 @@ async function sendMessage(options = {}) {
           state.activeChatTitle = event.chat.title || '';
           if (state.activeChatId) localStorage.setItem(LS_PREFIX + 'active-chat-id', state.activeChatId);
         }
+        // The server creates the conversation before generation starts. Make it
+        // reachable immediately, even if another chat has since been opened.
+        const sessions = Array.isArray(state.chatSessions) ? state.chatSessions : [];
+        const previous = sessions.find((chat) => chat.id === streamChatId);
+        state.chatSessions = [
+          { ...previous, ...event.chat },
+          ...sessions.filter((chat) => chat.id !== streamChatId),
+        ];
+        renderChatHistory();
       } else if (event.type === 'status') {
         receivedServerStatus = true;
         if (runtimePollTimer) {
